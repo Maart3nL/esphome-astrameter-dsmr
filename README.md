@@ -246,18 +246,18 @@ external_components:
 packages:
   tailscale:
     url: https://github.com/Csontikka/esphome-tailscale
-    ref: main          # ← see the nuance below
+    ref: f70c903d88e6b156770cbcb363f3ea5890a033c2   # ← pinned, verified commit
     files: [packages/tailscale/tailscale.yaml]
-    refresh: 0s
+    refresh: 1d
 ```
 
-> **Important nuance:** `ref: main` + `refresh: 0s` means ESPHome **re-fetches the latest
-> `main` on every build**. You get updates automatically — but unpredictably: a rebuild
-> months from now could pull a breaking change without you choosing to. For a stable device,
-> **pin `ref:` to a specific commit** instead. Last commit this repo was verified against:
-> `f70c903d88e6b156770cbcb363f3ea5890a033c2`.
+> **Why it's pinned:** the alternative — `ref: main` + `refresh: 0s` — makes ESPHome
+> **re-fetch the latest `main` on every build**. You'd get updates automatically, but
+> unpredictably: a rebuild months from now could pull a breaking change into a native-C++
+> component without you choosing to. So `ref:` is pinned to the commit this repo was last
+> verified against (`f70c903…`); update it deliberately when you want a newer version.
 
-To pin or update deliberately:
+To update the pin deliberately:
 
 1. **Find the current commit:** `git ls-remote https://github.com/Csontikka/esphome-tailscale main`
    (or browse the repo's commit history / releases).

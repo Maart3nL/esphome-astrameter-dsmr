@@ -102,6 +102,14 @@ psram:
 logger:
   level: INFO
 
+# Wall-clock time via SNTP. Tailscale's WireGuard/control-plane TLS needs a sane
+# clock, and MQTT/TLS handshakes fail until time is set — so don't rely on the
+# Tailscale package to bring its own. Uses the pool defaults; the device reaches
+# them over Ethernet at boot. (Harmless if another component also syncs time.)
+time:
+  - platform: sntp
+    id: sntp_time
+
 # Native API for Home Assistant — OPTIONAL. This device runs FULLY STANDALONE
 # without HA: DSMR → ct002 (UDP), the web UI, and Tailscale all work with no API
 # client connected. `reboot_timeout: 0s` stops ESPHome from rebooting every 15 min
@@ -142,7 +150,7 @@ web_server:
 external_components:
   - source: github://tomquist/astrameter@${astrameter_version}
     components: [ct002]
-    refresh: 1d
+    refresh: never        # tag is immutable; no need to re-check the remote ref
 
 # -----------------------------------------------------------------------------
 #  Tailscale — makes the web interface reachable remotely with no port-forwarding.
@@ -152,15 +160,16 @@ external_components:
 #  ESP32-S3 + octal PSRAM (mandatory) + esp-idf + ≥4 MB flash.
 #  Setup: put a Tailscale auth key in secrets.yaml as tailscale_auth_key, flash,
 #  then "Disable key expiry" on the machine in the admin console.
-#  Caveats: experimental; `ref: main` is unpinned — pin a commit for reproducible
-#  builds (see the upgrade notes at the bottom). ~2–5 Mbit/s tunnel.
+#  Caveats: experimental; ~2–5 Mbit/s tunnel. `ref:` is PINNED to a verified
+#  commit for reproducible builds — to update, see the upgrade notes at the
+#  bottom (find the new commit, bump `ref:`, then `esphome clean` + compile).
 # -----------------------------------------------------------------------------
 packages:
   tailscale:
     url: https://github.com/Csontikka/esphome-tailscale
-    ref: main
+    ref: f70c903d88e6b156770cbcb363f3ea5890a033c2   # verified commit; bump deliberately (see upgrade notes)
     files: [packages/tailscale/tailscale.yaml]
-    refresh: 0s
+    refresh: 1d
 
 tailscale:
   auth_key: !secret tailscale_auth_key
@@ -263,6 +272,11 @@ sensor:
       id: power_returned_l3
       internal: true
       on_value:
+        # ASSUMES A 3-PHASE METER: grid_l3 + the Total recompute hang off the L3
+        # field, so on a single-phase meter (no L2/L3 in the telegram) this never
+        # fires and "Grid Power Total" / L2 / L3 never publish. The ct002 path is
+        # unaffected — it reads grid_l1/l2/l3 directly. For a 1-phase meter, move
+        # the grid_power_total update onto power_returned_l1's on_value instead.
         then:
           - component.update: grid_l3
           - component.update: grid_power_total
@@ -639,8 +653,9 @@ ct002:
 #    7. Roll back by reverting `astrameter_version:` — pinned tags = reproducible.
 #
 #  Tailscale component (esphome-tailscale):
-#    `ref: main` + `refresh: 0s` re-fetches the latest main on EVERY build — handy
-#    but unpredictable. For a stable device, pin `ref:` to a commit:
+#    `ref:` is PINNED to a commit above so builds are reproducible (the alternative,
+#    `ref: main` + `refresh: 0s`, re-fetches latest main on EVERY build — handy but
+#    unpredictable for a native-C++ component). To move the pin to a newer commit:
 #      git ls-remote https://github.com/Csontikka/esphome-tailscale main
 #    then set ref: to that SHA, run `esphome clean` + `esphome compile`, flash, and
 #    confirm "VPN Connected" + that key-expiry is still disabled in the admin console.
