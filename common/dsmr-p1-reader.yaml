@@ -44,12 +44,14 @@ ethernet:
   reset_pin: GPIO9
   clock_speed: 25MHz
   # A fixed address keeps the device reachable at a known IP. Easiest is a DHCP
-  # reservation on your router; or pin it here (edit to match your LAN):
+  # reservation on your router; or pin it here — values come from secrets.yaml so
+  # a real address never lands in the public config (uncomment BOTH this block and
+  # the matching keys in secrets.yaml):
   # manual_ip:
-  #   static_ip: 192.168.1.50
-  #   gateway: 192.168.1.1
-  #   subnet: 255.255.255.0
-  #   dns1: 192.168.1.1
+  #   static_ip: !secret static_ip
+  #   gateway: !secret gateway
+  #   subnet: !secret subnet
+  #   dns1: !secret dns1
 
 # P1 UART. The P1 data line is open-collector AND logically inverted, so we invert
 # it in software and rely on an external 10k pull-up to 3V3. Using a ready-made P1
