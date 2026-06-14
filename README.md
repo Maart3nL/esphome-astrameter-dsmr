@@ -17,7 +17,6 @@ Sign convention: **+ = consumption / grid import**, **− = production / grid ex
 | File | Purpose |
 |------|---------|
 | [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml) | Full device: DSMR reader + CT002 emulator + web UI + Tailscale + MQTT |
-| [`dsmr-p1-meter.yaml`](dsmr-p1-meter.yaml) | Meter-only device (no battery emulation) |
 | [`common/dsmr-p1-reader.yaml`](common/dsmr-p1-reader.yaml) | Shared package: board, Ethernet, P1 UART, DSMR + all meter sensors |
 | `secrets.yaml` | Your secrets (gitignored — copy from `secrets.yaml.example`) |
 
