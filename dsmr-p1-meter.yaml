@@ -1,0 +1,39 @@
+# =============================================================================
+#  Dutch DSMR 5 (P1) energy meter reader — standalone (no battery emulation)
+#  Board : Waveshare ESP32-S3-POE-ETH  (ESP32-S3R8 + W5500 Ethernet + PoE)
+#
+#  All hardware + meter logic lives in the shared package
+#  common/dsmr-p1-reader.yaml, which exposes:
+#    • Grid Power L1/L2/L3 + Grid Power Total  (W, + = import, - = export)
+#    • Voltage L1/L2/L3
+#    • Energy Imported/Exported (Tariff 1 & 2)  (kWh, for HA's Energy dashboard)
+#
+#  This file adds only the device identity + connectivity. It's the meter-reading
+#  half of astrameter-ct002-dsmr.yaml without the CT002 emulator / web UI / VPN.
+# =============================================================================
+
+substitutions:
+  name: dsmr-p1-meter
+  friendly_name: "DSMR P1 Meter"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  dsmr_reader: !include common/dsmr-p1-reader.yaml
+
+logger:
+  level: INFO
+
+# Native API for Home Assistant — OPTIONAL. reboot_timeout: 0s keeps the device
+# running standalone (no reboot when HA is absent). Uses the same secrets.yaml as
+# the AstraMeter config. Delete this block if you never use Home Assistant.
+api:
+  encryption:
+    key: !secret api_encryption_key
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password

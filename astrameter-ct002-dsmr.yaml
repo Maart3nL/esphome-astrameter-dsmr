@@ -1,0 +1,487 @@
+# =============================================================================
+#  AstraMeter CT002 emulator  fed by a Dutch DSMR 5 (P1) meter
+#  Board : Waveshare ESP32-S3-POE-ETH  (ESP32-S3R8 + W5500 Ethernet + PoE)
+#
+#  The board + Ethernet + P1/DSMR reader + meter sensors live in the shared
+#  package common/dsmr-p1-reader.yaml. This file adds only what's specific to
+#  the CT002 emulator device: API/OTA/web UI, Tailscale, and the ct002 block.
+#
+#  Data path:  DSMR P1 telegram ──► grid_l1 / grid_l2 / grid_l3 (W, signed)
+#                                ──► ct002:  (Marstek CT002 emulator)
+#  Sign: + = consumption/import, - = production/export.
+# =============================================================================
+
+substitutions:
+  name: astrameter-ct002-dsmr
+  friendly_name: "AstraMeter CT002 (DSMR)"
+
+  # AstraMeter release to build against. Bump this ONE line to upgrade, then
+  # re-validate + re-flash (see the upgrade steps at the bottom of this file).
+  # Releases: https://github.com/tomquist/astrameter/releases
+  # Always pin a tag (reproducible). Use a branch like "main" only for testing.
+  astrameter_version: "2.1.2"
+
+  # (Web login, API key, OTA password and the Tailscale key live in secrets.yaml
+  #  beside this file — referenced below with !secret. The P1 pin wiring lives in
+  #  the shared package; override dsmr_rx_pin/dsmr_request_pin here if it differs.)
+
+  # ===========================================================================
+  #  ct002 TUNING VARIABLES  (compile-time — edit a value, then `esphome run`
+  #  to re-flash; the ct002 component bakes these in at build time, so they are
+  #  NOT live-adjustable from Home Assistant). All values below reproduce the
+  #  component defaults, so changing them is the only thing that changes behaviour.
+  # ===========================================================================
+
+  # ── ct002 core ─────────────────────────────────────────────────
+  active_control: "true"        # true = balancer steers batteries toward zero grid
+                                # false = forward the raw grid reading as-is
+  max_sensor_age: "30s"         # treat input as 0 W if no telegram arrives within this
+
+  # ── filters › hampel (cross-phase outlier rejection) ───────────
+  hampel_window: "7"            # sample window
+  hampel_n_sigma: "3.0"         # reject samples deviating > n_sigma·MAD
+  hampel_min_threshold: "50"    # …but never below this many W (keeps clean signal intact)
+
+  # ── filters › smoothing (EMA) ──────────────────────────────────
+  smoothing_alpha: "1.0"        # 1.0 = no smoothing (pass-through); lower (~0.3) = smoother
+  smoothing_max_step: "0"       # 0 = no per-step clamp; e.g. 200 = cap change to 200 W/step
+
+  # ── filters › deadband ─────────────────────────────────────────
+  deadband: "0"                 # 0 = off; e.g. 10 zeros out |grid sum| < 10 W
+
+  # ── balancer (multi-battery load split; active when active_control: true) ──
+  fair_distribution: "true"
+  balance_gain: "0.2"
+  balance_deadband: "15"
+  error_boost_threshold: "150"
+  error_boost_max: "0.5"
+  error_reduce_threshold: "20"
+  max_correction_per_step: "80"
+  max_target_step: "0"          # 0 = no per-step target clamp
+  min_dc_output: "0"            # >0 keeps a DC battery (B2500) inverter awake
+  min_efficient_power: "0"      # >0 enables efficiency rotation
+  probe_min_power: "80"
+  efficiency_rotation_interval: "15min"
+  efficiency_fade_alpha: "0.15"
+  efficiency_saturation_threshold: "0.4"
+
+  # ── saturation tracker (backs off a battery that can't follow its target) ──
+  saturation_enabled: "true"
+  saturation_alpha: "0.15"
+  saturation_min_target: "20"
+  saturation_decay_factor: "0.995"
+  saturation_grace_seconds: "90s"
+  saturation_stall_timeout_seconds: "60s"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+# Raise the lwIP socket pool. ESPHome auto-sizes it from the components it knows
+# (api/mqtt/web_server/mdns/ota = 14, with zero margin) but can't account for
+# ct002's UDP responder or Tailscale's DERP/control-plane sockets, which open
+# their own. This gives those headroom so the pool can't be exhausted at runtime.
+# (Merges with the esp32: board/flash/framework defined in the shared package.)
+esp32:
+  framework:
+    sdkconfig_options:
+      CONFIG_LWIP_MAX_SOCKETS: "24"
+
+# -----------------------------------------------------------------------------
+#  Packages
+#   • dsmr_reader — shared board + Ethernet + P1/DSMR reader + meter sensors.
+#   • tailscale   — makes the web interface reachable remotely with no port-
+#     forwarding: the ESP joins your tailnet as a real node (third-party
+#     MicroLink-based component). Reach the UI at http://${name}/ (MagicDNS) or
+#     the node's 100.x.y.z IP from anywhere on the tailnet.
+#     Requirements (all met by this board): ESP32-S3 + octal PSRAM (mandatory) +
+#     esp-idf + ≥4 MB flash. Setup: generate a Tailscale auth key, put it in
+#     secrets.yaml as tailscale_auth_key, flash, then "Disable key expiry" on the
+#     machine in the admin console. Caveats: experimental; `ref: main` is
+#     unpinned (pin a commit once stable); ~2–5 Mbit/s tunnel.
+# -----------------------------------------------------------------------------
+packages:
+  dsmr_reader: !include common/dsmr-p1-reader.yaml
+  tailscale:
+    url: https://github.com/Csontikka/esphome-tailscale
+    ref: main
+    files: [packages/tailscale/tailscale.yaml]
+    refresh: 0s
+
+logger:
+  level: INFO
+
+# Native API for Home Assistant — OPTIONAL. This device runs FULLY STANDALONE
+# without HA: DSMR → ct002 (UDP), the web UI, and Tailscale all work with no API
+# client connected. `reboot_timeout: 0s` stops ESPHome from rebooting every 15 min
+# when HA is absent/unreachable (the default), which would interrupt the emulator
+# and the VPN. Encryption secures the link now that the device is remotely
+# reachable. Delete this block entirely if you never use Home Assistant.
+api:
+  encryption:
+    key: !secret api_encryption_key
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome        # ESPHome dashboard / CLI OTA (esphome run)
+    password: !secret ota_password
+  - platform: web_server     # enables the "Upload firmware" form in the web UI below
+
+# Built-in web interface — http://<device-ip>/ (and remotely via Tailscale).
+# Lists every non-internal entity (Grid Power L1/L2/L3 + Total, voltages, energy
+# totals, and the Tailscale package's VPN diagnostics) and provides an OTA
+# firmware-upload form. local: true embeds the UI assets so it works offline.
+web_server:
+  port: 80
+  version: 2
+  local: true
+  auth:
+    username: !secret web_username
+    password: !secret web_password
+
+# -----------------------------------------------------------------------------
+#  AstraMeter CT002 emulator component.
+#  Local-source alternative (build from the copy in your Downloads folder):
+#    external_components:
+#      - source:
+#          type: local
+#          path: /Users/maarten/Downloads/AstraMeter-2.1.2/esphome/components
+#        components: [ct002]
+# -----------------------------------------------------------------------------
+external_components:
+  - source: github://tomquist/astrameter@${astrameter_version}
+    components: [ct002]
+    refresh: 1d
+
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  hostname: ${name}            # MagicDNS name → reach the UI at http://${name}/
+
+# -----------------------------------------------------------------------------
+#  MQTT — Home Assistant's Mosquitto, reached OVER the Tailscale tunnel.
+#  esphome-tailscale's lwIP integration routes this outbound socket through the
+#  VPN, so the broker only needs to be reachable on the tailnet. Used by the
+#  ct002 mqtt_insights sub-block (HA discovery of per-battery insights + the
+#  Marstek-app responder).
+#    • discovery: false   — the native api: already exposes THIS device's entities
+#      to HA; we don't double-publish them over MQTT. (mqtt_insights still
+#      publishes its own discovery for the insight entities.)
+#    • reboot_timeout: 0s — stay up (standalone) if the broker/tailnet is down.
+#  Using the HA host's raw Tailscale IP — most reliable on a microcontroller (no
+#  MagicDNS resolution needed). MagicDNS alternative: homeassistant.<your-tailnet>.ts.net
+#  (Broker address is in secrets.yaml so this public repo doesn't expose it.)
+# -----------------------------------------------------------------------------
+mqtt:
+  broker: !secret mqtt_broker
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: false
+  reboot_timeout: 0s
+
+# -----------------------------------------------------------------------------
+#  Marstek CT002 emulator. Three-phase: feed the package's grid_l? sensors.
+#  Tuning blocks below are wired to the substitutions at the top of this file.
+# -----------------------------------------------------------------------------
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+
+  ct_type: HME-4                  # HME-4 = CT002, HME-3 = CT003
+  active_control: ${active_control}
+  max_sensor_age: ${max_sensor_age}
+
+  # ── Cross-phase signal conditioning (applied to the L1/L2/L3 vector) ──
+  filters:
+    hampel:
+      window: ${hampel_window}
+      n_sigma: ${hampel_n_sigma}
+      min_threshold: ${hampel_min_threshold}
+    smoothing:
+      alpha: ${smoothing_alpha}
+      max_step: ${smoothing_max_step}
+    deadband:
+      deadband: ${deadband}
+    # PID is an ALTERNATIVE controller — do NOT combine it with the balancer
+    # (active_control). Only enable this with active_control: "false".
+    # pid:
+    #   kp: 0.0
+    #   ki: 0.0
+    #   kd: 0.0
+    #   output_max: 800
+    #   mode: bias
+
+  # ── Multi-battery load balancer (runs when active_control is true) ──
+  balancer:
+    fair_distribution: ${fair_distribution}
+    balance_gain: ${balance_gain}
+    balance_deadband: ${balance_deadband}
+    error_boost_threshold: ${error_boost_threshold}
+    error_boost_max: ${error_boost_max}
+    error_reduce_threshold: ${error_reduce_threshold}
+    max_correction_per_step: ${max_correction_per_step}
+    max_target_step: ${max_target_step}
+    min_dc_output: ${min_dc_output}
+    min_efficient_power: ${min_efficient_power}
+    probe_min_power: ${probe_min_power}
+    efficiency_rotation_interval: ${efficiency_rotation_interval}
+    efficiency_fade_alpha: ${efficiency_fade_alpha}
+    efficiency_saturation_threshold: ${efficiency_saturation_threshold}
+
+  # ── Saturation tracker ──
+  saturation:
+    enabled: ${saturation_enabled}
+    alpha: ${saturation_alpha}
+    min_target: ${saturation_min_target}
+    decay_factor: ${saturation_decay_factor}
+    grace_seconds: ${saturation_grace_seconds}
+    stall_timeout_seconds: ${saturation_stall_timeout_seconds}
+
+  # ── MQTT insights — publishes HA Device Discovery for the per-battery state
+  #    (manual/auto target, active, distribution weight, …) and answers Marstek-
+  #    app polls on the broker. Requires the top-level mqtt: block above. ──
+  mqtt_insights:
+    base_topic: astrameter
+    ha_discovery: true
+    # device_id: device-1            # HA discovery node id (default matches add-on)
+    # marstek_mqtt_enabled: true     # answer Marstek-app polls on the broker
+
+# -----------------------------------------------------------------------------
+#  AstraMeter / CT002 — runtime state + configured settings as entities.
+#  The bare ct002: block publishes nothing, so these template entities read its
+#  public API (the same accessors mqtt_insights uses) to make the emulator's
+#  state and your compile-time tuning visible in the web UI / Home Assistant.
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: template
+    name: "CT002 Active Control"
+    entity_category: diagnostic
+    lambda: "return id(ct002_main).active_control();"
+
+sensor:
+  # --- Runtime state (live) ---
+  - platform: template
+    name: "Batteries Connected"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: "return (float) id(ct002_main).connected_slave_count();"
+  # Grid power AS CT002 SEES IT (after the hampel/smoothing/deadband filters,
+  # pre-balancer). With pass-through defaults this matches the meter's Grid Power
+  # sensors; it diverges once you tune the filters — handy for debugging.
+  - platform: template
+    name: "CT002 Grid Input L1"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      auto v = id(ct002_main).latest_grid_power();
+      return v.size() > 0 ? v[0] : 0.0f;
+  - platform: template
+    name: "CT002 Grid Input L2"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      auto v = id(ct002_main).latest_grid_power();
+      return v.size() > 1 ? v[1] : 0.0f;
+  - platform: template
+    name: "CT002 Grid Input L3"
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      auto v = id(ct002_main).latest_grid_power();
+      return v.size() > 2 ? v[2] : 0.0f;
+
+text_sensor:
+  # --- Runtime identity ---
+  - platform: template
+    name: "CT002 Type"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: "return id(ct002_main).ct_type();"
+  - platform: template
+    name: "CT002 MAC"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      std::string m = id(ct002_main).ct_mac();
+      return m.empty() ? std::string("mirror (per battery)") : m;
+  # --- Configured settings (compile-time; mirror EVERY tuning substitution above
+  #     so the full active tuning is visible without opening the YAML. Static
+  #     text — they change only when you edit a substitution and re-flash.
+  #     active_control is the binary sensor above; ct_type is "CT002 Type".) ---
+  # Core
+  - platform: template
+    name: "Setting · Max Sensor Age"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${max_sensor_age}");'
+  # Filters › hampel
+  - platform: template
+    name: "Setting · Hampel Window"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${hampel_window}");'
+  - platform: template
+    name: "Setting · Hampel N-Sigma"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${hampel_n_sigma}");'
+  - platform: template
+    name: "Setting · Hampel Min Threshold (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${hampel_min_threshold}");'
+  # Filters › smoothing
+  - platform: template
+    name: "Setting · Smoothing Alpha"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${smoothing_alpha}");'
+  - platform: template
+    name: "Setting · Smoothing Max Step (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${smoothing_max_step}");'
+  # Filters › deadband
+  - platform: template
+    name: "Setting · Deadband (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${deadband}");'
+  # Balancer
+  - platform: template
+    name: "Setting · Fair Distribution"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${fair_distribution}");'
+  - platform: template
+    name: "Setting · Balance Gain"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${balance_gain}");'
+  - platform: template
+    name: "Setting · Balance Deadband (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${balance_deadband}");'
+  - platform: template
+    name: "Setting · Error Boost Threshold (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${error_boost_threshold}");'
+  - platform: template
+    name: "Setting · Error Boost Max"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${error_boost_max}");'
+  - platform: template
+    name: "Setting · Error Reduce Threshold (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${error_reduce_threshold}");'
+  - platform: template
+    name: "Setting · Max Correction per Step (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${max_correction_per_step}");'
+  - platform: template
+    name: "Setting · Max Target Step (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${max_target_step}");'
+  - platform: template
+    name: "Setting · Min DC Output (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${min_dc_output}");'
+  - platform: template
+    name: "Setting · Min Efficient Power (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${min_efficient_power}");'
+  - platform: template
+    name: "Setting · Probe Min Power (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${probe_min_power}");'
+  - platform: template
+    name: "Setting · Efficiency Rotation Interval"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${efficiency_rotation_interval}");'
+  - platform: template
+    name: "Setting · Efficiency Fade Alpha"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${efficiency_fade_alpha}");'
+  - platform: template
+    name: "Setting · Efficiency Saturation Threshold"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${efficiency_saturation_threshold}");'
+  # Saturation tracker
+  - platform: template
+    name: "Setting · Saturation Enabled"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${saturation_enabled}");'
+  - platform: template
+    name: "Setting · Saturation Alpha"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${saturation_alpha}");'
+  - platform: template
+    name: "Setting · Saturation Min Target (W)"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${saturation_min_target}");'
+  - platform: template
+    name: "Setting · Saturation Decay Factor"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${saturation_decay_factor}");'
+  - platform: template
+    name: "Setting · Saturation Grace"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${saturation_grace_seconds}");'
+  - platform: template
+    name: "Setting · Saturation Stall Timeout"
+    entity_category: diagnostic
+    update_interval: 6h
+    lambda: 'return std::string("${saturation_stall_timeout_seconds}");'
+
+# =============================================================================
+#  UPGRADING TO A NEW ASTRAMETER RELEASE
+#  -------------------------------------
+#  1. Read what changed first. Open the release notes and scan every entry
+#     between your current version and the target — especially any "Breaking"
+#     section and anything mentioning ESPHome / ct002 / a renamed key:
+#       https://github.com/tomquist/astrameter/releases
+#       https://github.com/tomquist/astrameter/blob/main/CHANGELOG.md
+#     (The ct002 ESPHome component is still flagged experimental, so its YAML
+#      schema can change between releases.)
+#  2. Bump `astrameter_version:` above to the new tag (e.g. "2.2.0").
+#  3. Validate WITHOUT flashing — this catches renamed/removed keys:
+#       esphome config astrameter-ct002-dsmr.yaml
+#  4. Build + flash:
+#       esphome run astrameter-ct002-dsmr.yaml
+#     If the new ref doesn't seem to take effect, clear the cached checkout:
+#       esphome clean astrameter-ct002-dsmr.yaml      # wipes .esphome build cache
+#  5. Roll back any time by setting `astrameter_version:` back to the old tag
+#     and re-flashing — pinned tags make every build reproducible.
+#
+#  Tip: keep ESPHome itself current (`pip install -U esphome` or update the
+#  add-on) before a big component bump — new ct002 keys may need a newer ESPHome.
+# =============================================================================

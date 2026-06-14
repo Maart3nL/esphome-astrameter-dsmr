@@ -1,0 +1,184 @@
+# =============================================================================
+#  SHARED PACKAGE — Dutch DSMR 5 (P1) meter reader: hardware + sensors
+#  Board: Waveshare ESP32-S3-POE-ETH (ESP32-S3R8 + W5500 Ethernet + PoE)
+#
+#  Pulled in via `packages:` by the device configs. It owns everything common to
+#  "read the P1 meter on this board" so the device files don't duplicate it:
+#    • esp32 board + 8 MB octal PSRAM
+#    • wired Ethernet (W5500 over SPI)
+#    • the P1 UART + dsmr component
+#    • all meter sensors, including the signed per-phase grid_l1/l2/l3 and
+#      grid_power_total  (+ = import/consumption, - = export/production, in Watt)
+#
+#  Device-specific things (esphome name, logger, api, ota, web_server, tailscale,
+#  ct002, …) stay in the including file. Override the P1 wiring by redefining the
+#  substitutions below in that file; the defaults match the Waveshare board.
+# =============================================================================
+
+substitutions:
+  dsmr_rx_pin: GPIO16         # P1 data line (RJ12 pin 5) → ESP RX (10k pull-up to 3V3)
+  dsmr_request_pin: GPIO17    # P1 "Data Request" / RTS (RJ12 pin 2), driven HIGH
+  dsmr_baud_rate: "115200"    # DSMR 5.x = 115200 8N1 (older DSMR 2/3 = 9600)
+
+# Module: ESP32-S3-WROOM-1U-N16R8 → 16 MB flash + 8 MB octal PSRAM (chip ESP32-S3R8).
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+# 8 MB octal PSRAM (the "R8"); occupies GPIO33–37 (why those pins are reserved).
+psram:
+  mode: octal
+  speed: 80MHz
+
+# Wired Ethernet (W5500 over SPI) — Waveshare ESP32-S3-POE-ETH pin mapping.
+# PoE powers the board; no Wi-Fi. The device must share the meter/battery subnet.
+ethernet:
+  type: W5500
+  clk_pin: GPIO13
+  mosi_pin: GPIO11
+  miso_pin: GPIO12
+  cs_pin: GPIO14
+  interrupt_pin: GPIO10
+  reset_pin: GPIO9
+  clock_speed: 25MHz
+  # A fixed address keeps the device reachable at a known IP. Easiest is a DHCP
+  # reservation on your router; or pin it here (edit to match your LAN):
+  # manual_ip:
+  #   static_ip: 192.168.1.50
+  #   gateway: 192.168.1.1
+  #   subnet: 255.255.255.0
+  #   dns1: 192.168.1.1
+
+# P1 UART. The P1 data line is open-collector AND logically inverted, so we invert
+# it in software and rely on an external 10k pull-up to 3V3. Using a ready-made P1
+# cable with a built-in inverter? Set `inverted: false` here.
+uart:
+  id: uart_dsmr
+  baud_rate: ${dsmr_baud_rate}
+  rx_pin:
+    number: ${dsmr_rx_pin}
+    inverted: true
+  rx_buffer_size: 1700       # one SMR5 telegram is large; give it room
+
+dsmr:
+  id: dsmr_instance
+  uart_id: uart_dsmr
+  request_pin: ${dsmr_request_pin}
+  max_telegram_length: 1700
+  # Dutch SMR5 telegrams are NOT encrypted, so no decryption_key is needed.
+
+sensor:
+  # --- Raw per-phase power (kW). Internal; feed the signed grid_l? templates.
+  #     Each returned-sensor's on_value fires once per telegram (parsed right
+  #     after the matching delivered value), so both inputs are fresh. ---------
+  - platform: dsmr
+    power_delivered_l1:           # OBIS 1-0:21.7.0
+      id: power_delivered_l1
+      internal: true
+    power_delivered_l2:           # OBIS 1-0:41.7.0
+      id: power_delivered_l2
+      internal: true
+    power_delivered_l3:           # OBIS 1-0:61.7.0
+      id: power_delivered_l3
+      internal: true
+    power_returned_l1:            # OBIS 1-0:22.7.0
+      id: power_returned_l1
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l1
+    power_returned_l2:            # OBIS 1-0:42.7.0
+      id: power_returned_l2
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l2
+    power_returned_l3:            # OBIS 1-0:62.7.0
+      id: power_returned_l3
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l3
+          - component.update: grid_power_total
+
+    # --- Richer meter data (visible). Units/device_class/state_class come from
+    #     the DSMR defaults; the energy totals are total_increasing kWh, ready
+    #     for Home Assistant's Energy dashboard. --------------------------------
+    voltage_l1:
+      name: "Voltage L1"
+    voltage_l2:
+      name: "Voltage L2"
+    voltage_l3:
+      name: "Voltage L3"
+    energy_delivered_tariff1:
+      name: "Energy Imported (Tariff 1)"
+    energy_delivered_tariff2:
+      name: "Energy Imported (Tariff 2)"
+    energy_returned_tariff1:
+      name: "Energy Exported (Tariff 1)"
+    energy_returned_tariff2:
+      name: "Energy Exported (Tariff 2)"
+
+  # --- Net grid power per phase in Watt (+ import / - export) -----------------
+  - platform: template
+    name: "Grid Power L1"
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never        # recomputed on each telegram (see on_value above)
+    lambda: |-
+      float in_w = id(power_delivered_l1).state;
+      float out_w = id(power_returned_l1).state;
+      if (std::isnan(in_w)) in_w = 0.0f;     // phase missing from telegram → treat as 0
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  - platform: template
+    name: "Grid Power L2"
+    id: grid_l2
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float in_w = id(power_delivered_l2).state;
+      float out_w = id(power_returned_l2).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  - platform: template
+    name: "Grid Power L3"
+    id: grid_l3
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float in_w = id(power_delivered_l3).state;
+      float out_w = id(power_returned_l3).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  # --- Total net grid power (sum of the three phases), in Watt ---------------
+  - platform: template
+    name: "Grid Power Total"
+    id: grid_power_total
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never        # recomputed once per telegram (after grid_l3)
+    lambda: |-
+      float total = 0.0f;
+      if (!std::isnan(id(grid_l1).state)) total += id(grid_l1).state;
+      if (!std::isnan(id(grid_l2).state)) total += id(grid_l2).state;
+      if (!std::isnan(id(grid_l3).state)) total += id(grid_l3).state;
+      return total;

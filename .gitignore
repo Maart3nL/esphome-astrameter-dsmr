@@ -1,0 +1,12 @@
+# Gitignore settings for ESPHome
+# This is an example and may include too much for your use-case.
+# You can modify this file to suit your needs.
+/.esphome/
+/secrets.yaml
+
+# Local copy of the upstream ct002 component (config pulls it via external_components)
+/components/
+
+# Editor / OS / local tooling
+.DS_Store
+/.claude/settings.local.json
