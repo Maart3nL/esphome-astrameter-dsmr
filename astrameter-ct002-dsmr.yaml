@@ -2,9 +2,10 @@
 #  AstraMeter CT002 emulator  fed by a Dutch DSMR 5 (P1) meter
 #  Board : Waveshare ESP32-S3-POE-ETH  (ESP32-S3R8 + W5500 Ethernet + PoE)
 #
-#  The board + Ethernet + P1/DSMR reader + meter sensors live in the shared
-#  package common/dsmr-p1-reader.yaml. This file adds only what's specific to
-#  the CT002 emulator device: API/OTA/web UI, Tailscale, and the ct002 block.
+#  Single, self-contained config: board + Ethernet + P1/DSMR reader + meter
+#  sensors + the CT002 emulator + web UI + Tailscale + MQTT. To install:
+#    cp secrets.yaml.example secrets.yaml      # then fill it in
+#    esphome run astrameter-ct002-dsmr.yaml
 #
 #  Data path:  DSMR P1 telegram ──► grid_l1 / grid_l2 / grid_l3 (W, signed)
 #                                ──► ct002:  (Marstek CT002 emulator)
@@ -21,9 +22,13 @@ substitutions:
   # Always pin a tag (reproducible). Use a branch like "main" only for testing.
   astrameter_version: "2.1.2"
 
-  # (Web login, API key, OTA password and the Tailscale key live in secrets.yaml
-  #  beside this file — referenced below with !secret. The P1 pin wiring lives in
-  #  the shared package; override dsmr_rx_pin/dsmr_request_pin here if it differs.)
+  # (Web login, API key, OTA password, MQTT broker/creds and the Tailscale key
+  #  all live in secrets.yaml beside this file — referenced below with !secret.)
+
+  # ── P1 wiring (Waveshare board defaults; change if your wiring differs) ──
+  dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) → ESP RX (10k pull-up to 3V3)
+  dsmr_request_pin: GPIO17      # P1 "Data Request" / RTS (RJ12 pin 2), driven HIGH
+  dsmr_baud_rate: "115200"      # DSMR 5.x = 115200 8N1 (older DSMR 2/3 = 9600)
 
   # ===========================================================================
   #  ct002 TUNING VARIABLES  (compile-time — edit a value, then `esphome run`
@@ -77,36 +82,22 @@ esphome:
   name: ${name}
   friendly_name: ${friendly_name}
 
-# Raise the lwIP socket pool. ESPHome auto-sizes it from the components it knows
-# (api/mqtt/web_server/mdns/ota = 14, with zero margin) but can't account for
-# ct002's UDP responder or Tailscale's DERP/control-plane sockets, which open
-# their own. This gives those headroom so the pool can't be exhausted at runtime.
-# (Merges with the esp32: board/flash/framework defined in the shared package.)
+# Module: ESP32-S3-WROOM-1U-N16R8 → 16 MB flash + 8 MB octal PSRAM (chip ESP32-S3R8).
+# CONFIG_LWIP_MAX_SOCKETS is raised because ESPHome's auto-size (14, zero margin) does
+# not account for ct002's UDP responder or Tailscale's DERP/control-plane sockets.
 esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
   framework:
+    type: esp-idf
     sdkconfig_options:
       CONFIG_LWIP_MAX_SOCKETS: "24"
 
-# -----------------------------------------------------------------------------
-#  Packages
-#   • dsmr_reader — shared board + Ethernet + P1/DSMR reader + meter sensors.
-#   • tailscale   — makes the web interface reachable remotely with no port-
-#     forwarding: the ESP joins your tailnet as a real node (third-party
-#     MicroLink-based component). Reach the UI at http://${name}/ (MagicDNS) or
-#     the node's 100.x.y.z IP from anywhere on the tailnet.
-#     Requirements (all met by this board): ESP32-S3 + octal PSRAM (mandatory) +
-#     esp-idf + ≥4 MB flash. Setup: generate a Tailscale auth key, put it in
-#     secrets.yaml as tailscale_auth_key, flash, then "Disable key expiry" on the
-#     machine in the admin console. Caveats: experimental; `ref: main` is
-#     unpinned (pin a commit once stable); ~2–5 Mbit/s tunnel.
-# -----------------------------------------------------------------------------
-packages:
-  dsmr_reader: !include common/dsmr-p1-reader.yaml
-  tailscale:
-    url: https://github.com/Csontikka/esphome-tailscale
-    ref: main
-    files: [packages/tailscale/tailscale.yaml]
-    refresh: 0s
+# 8 MB octal PSRAM (the "R8"); occupies GPIO33–37 (why those pins are reserved).
+# Mandatory for the Tailscale component — its control-plane buffers live here.
+psram:
+  mode: octal
+  speed: 80MHz
 
 logger:
   level: INFO
@@ -129,8 +120,8 @@ ota:
 
 # Built-in web interface — http://<device-ip>/ (and remotely via Tailscale).
 # Lists every non-internal entity (Grid Power L1/L2/L3 + Total, voltages, energy
-# totals, and the Tailscale package's VPN diagnostics) and provides an OTA
-# firmware-upload form. local: true embeds the UI assets so it works offline.
+# totals, CT002 state, and the Tailscale package's VPN diagnostics) and provides
+# an OTA firmware-upload form. local: true embeds the UI assets so it works offline.
 web_server:
   port: 80
   version: 2
@@ -140,12 +131,12 @@ web_server:
     password: !secret web_password
 
 # -----------------------------------------------------------------------------
-#  AstraMeter CT002 emulator component.
-#  Local-source alternative (build from the copy in your Downloads folder):
+#  AstraMeter CT002 emulator component (pulled from GitHub).
+#  Local-source alternative (build from a local checkout):
 #    external_components:
 #      - source:
 #          type: local
-#          path: /Users/maarten/Downloads/AstraMeter-2.1.2/esphome/components
+#          path: /path/to/astrameter/esphome/components
 #        components: [ct002]
 # -----------------------------------------------------------------------------
 external_components:
@@ -153,9 +144,50 @@ external_components:
     components: [ct002]
     refresh: 1d
 
+# -----------------------------------------------------------------------------
+#  Tailscale — makes the web interface reachable remotely with no port-forwarding.
+#  The ESP joins your tailnet as a real node (third-party MicroLink-based
+#  component). Reach the UI at http://${name}/ (MagicDNS) or the node's 100.x.y.z
+#  IP from anywhere on the tailnet. Requirements (all met by this board):
+#  ESP32-S3 + octal PSRAM (mandatory) + esp-idf + ≥4 MB flash.
+#  Setup: put a Tailscale auth key in secrets.yaml as tailscale_auth_key, flash,
+#  then "Disable key expiry" on the machine in the admin console.
+#  Caveats: experimental; `ref: main` is unpinned — pin a commit for reproducible
+#  builds (see the upgrade notes at the bottom). ~2–5 Mbit/s tunnel.
+# -----------------------------------------------------------------------------
+packages:
+  tailscale:
+    url: https://github.com/Csontikka/esphome-tailscale
+    ref: main
+    files: [packages/tailscale/tailscale.yaml]
+    refresh: 0s
+
 tailscale:
   auth_key: !secret tailscale_auth_key
   hostname: ${name}            # MagicDNS name → reach the UI at http://${name}/
+
+# -----------------------------------------------------------------------------
+#  Wired Ethernet (W5500 over SPI) — Waveshare ESP32-S3-POE-ETH pin mapping.
+#  PoE powers the board; no Wi-Fi. The device must share the meter/battery subnet.
+# -----------------------------------------------------------------------------
+ethernet:
+  type: W5500
+  clk_pin: GPIO13
+  mosi_pin: GPIO11
+  miso_pin: GPIO12
+  cs_pin: GPIO14
+  interrupt_pin: GPIO10
+  reset_pin: GPIO9
+  clock_speed: 25MHz
+  # A fixed address keeps the device reachable at a known IP. Easiest is a DHCP
+  # reservation on your router; or pin it here — values come from secrets.yaml so
+  # a real address never lands in the public config (uncomment BOTH this block and
+  # the matching keys in secrets.yaml):
+  # manual_ip:
+  #   static_ip: !secret static_ip
+  #   gateway: !secret gateway
+  #   subnet: !secret subnet
+  #   dns1: !secret dns1
 
 # -----------------------------------------------------------------------------
 #  MQTT — Home Assistant's Mosquitto, reached OVER the Tailscale tunnel.
@@ -167,9 +199,8 @@ tailscale:
 #      to HA; we don't double-publish them over MQTT. (mqtt_insights still
 #      publishes its own discovery for the insight entities.)
 #    • reboot_timeout: 0s — stay up (standalone) if the broker/tailnet is down.
-#  Using the HA host's raw Tailscale IP — most reliable on a microcontroller (no
-#  MagicDNS resolution needed). MagicDNS alternative: homeassistant.<your-tailnet>.ts.net
-#  (Broker address is in secrets.yaml so this public repo doesn't expose it.)
+#  broker is in secrets.yaml — use the HA host's raw Tailscale IP (most reliable
+#  on a microcontroller) or its MagicDNS name.
 # -----------------------------------------------------------------------------
 mqtt:
   broker: !secret mqtt_broker
@@ -180,88 +211,142 @@ mqtt:
   reboot_timeout: 0s
 
 # -----------------------------------------------------------------------------
-#  Marstek CT002 emulator. Three-phase: feed the package's grid_l? sensors.
-#  Tuning blocks below are wired to the substitutions at the top of this file.
+#  P1 port UART. The P1 data line is open-collector AND logically inverted, so we
+#  invert it in software and rely on an external 10k pull-up to 3V3. Using a
+#  ready-made P1 cable with a built-in inverter? Set `inverted: false` here.
 # -----------------------------------------------------------------------------
-ct002:
-  id: ct002_main
-  power_sensor_l1: grid_l1
-  power_sensor_l2: grid_l2
-  power_sensor_l3: grid_l3
+uart:
+  id: uart_dsmr
+  baud_rate: ${dsmr_baud_rate}
+  rx_pin:
+    number: ${dsmr_rx_pin}
+    inverted: true
+  rx_buffer_size: 1700       # one SMR5 telegram is large; give it room
 
-  ct_type: HME-4                  # HME-4 = CT002, HME-3 = CT003
-  active_control: ${active_control}
-  max_sensor_age: ${max_sensor_age}
-
-  # ── Cross-phase signal conditioning (applied to the L1/L2/L3 vector) ──
-  filters:
-    hampel:
-      window: ${hampel_window}
-      n_sigma: ${hampel_n_sigma}
-      min_threshold: ${hampel_min_threshold}
-    smoothing:
-      alpha: ${smoothing_alpha}
-      max_step: ${smoothing_max_step}
-    deadband:
-      deadband: ${deadband}
-    # PID is an ALTERNATIVE controller — do NOT combine it with the balancer
-    # (active_control). Only enable this with active_control: "false".
-    # pid:
-    #   kp: 0.0
-    #   ki: 0.0
-    #   kd: 0.0
-    #   output_max: 800
-    #   mode: bias
-
-  # ── Multi-battery load balancer (runs when active_control is true) ──
-  balancer:
-    fair_distribution: ${fair_distribution}
-    balance_gain: ${balance_gain}
-    balance_deadband: ${balance_deadband}
-    error_boost_threshold: ${error_boost_threshold}
-    error_boost_max: ${error_boost_max}
-    error_reduce_threshold: ${error_reduce_threshold}
-    max_correction_per_step: ${max_correction_per_step}
-    max_target_step: ${max_target_step}
-    min_dc_output: ${min_dc_output}
-    min_efficient_power: ${min_efficient_power}
-    probe_min_power: ${probe_min_power}
-    efficiency_rotation_interval: ${efficiency_rotation_interval}
-    efficiency_fade_alpha: ${efficiency_fade_alpha}
-    efficiency_saturation_threshold: ${efficiency_saturation_threshold}
-
-  # ── Saturation tracker ──
-  saturation:
-    enabled: ${saturation_enabled}
-    alpha: ${saturation_alpha}
-    min_target: ${saturation_min_target}
-    decay_factor: ${saturation_decay_factor}
-    grace_seconds: ${saturation_grace_seconds}
-    stall_timeout_seconds: ${saturation_stall_timeout_seconds}
-
-  # ── MQTT insights — publishes HA Device Discovery for the per-battery state
-  #    (manual/auto target, active, distribution weight, …) and answers Marstek-
-  #    app polls on the broker. Requires the top-level mqtt: block above. ──
-  mqtt_insights:
-    base_topic: astrameter
-    ha_discovery: true
-    # device_id: device-1            # HA discovery node id (default matches add-on)
-    # marstek_mqtt_enabled: true     # answer Marstek-app polls on the broker
+dsmr:
+  id: dsmr_instance
+  uart_id: uart_dsmr
+  request_pin: ${dsmr_request_pin}
+  max_telegram_length: 1700
+  # Dutch SMR5 telegrams are NOT encrypted, so no decryption_key is needed.
 
 # -----------------------------------------------------------------------------
-#  AstraMeter / CT002 — runtime state + configured settings as entities.
-#  The bare ct002: block publishes nothing, so these template entities read its
-#  public API (the same accessors mqtt_insights uses) to make the emulator's
-#  state and your compile-time tuning visible in the web UI / Home Assistant.
+#  Sensors — meter readings + CT002 runtime state.
 # -----------------------------------------------------------------------------
-binary_sensor:
-  - platform: template
-    name: "CT002 Active Control"
-    entity_category: diagnostic
-    lambda: "return id(ct002_main).active_control();"
-
 sensor:
-  # --- Runtime state (live) ---
+  # --- Meter: raw per-phase power (kW, internal) feeding the signed grid_l?
+  #     templates. Each returned-sensor's on_value fires once per telegram (parsed
+  #     right after the matching delivered value), so both inputs are fresh. -----
+  - platform: dsmr
+    power_delivered_l1:           # OBIS 1-0:21.7.0
+      id: power_delivered_l1
+      internal: true
+    power_delivered_l2:           # OBIS 1-0:41.7.0
+      id: power_delivered_l2
+      internal: true
+    power_delivered_l3:           # OBIS 1-0:61.7.0
+      id: power_delivered_l3
+      internal: true
+    power_returned_l1:            # OBIS 1-0:22.7.0
+      id: power_returned_l1
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l1
+    power_returned_l2:            # OBIS 1-0:42.7.0
+      id: power_returned_l2
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l2
+    power_returned_l3:            # OBIS 1-0:62.7.0
+      id: power_returned_l3
+      internal: true
+      on_value:
+        then:
+          - component.update: grid_l3
+          - component.update: grid_power_total
+
+    # --- Richer meter data (visible). Units/device_class/state_class come from
+    #     the DSMR defaults; the energy totals are total_increasing kWh, ready
+    #     for Home Assistant's Energy dashboard. --------------------------------
+    voltage_l1:
+      name: "Voltage L1"
+    voltage_l2:
+      name: "Voltage L2"
+    voltage_l3:
+      name: "Voltage L3"
+    energy_delivered_tariff1:
+      name: "Energy Imported (Tariff 1)"
+    energy_delivered_tariff2:
+      name: "Energy Imported (Tariff 2)"
+    energy_returned_tariff1:
+      name: "Energy Exported (Tariff 1)"
+    energy_returned_tariff2:
+      name: "Energy Exported (Tariff 2)"
+
+  # --- Net grid power per phase in Watt (+ import / - export) — fed to ct002 ----
+  - platform: template
+    name: "Grid Power L1"
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never        # recomputed on each telegram (see on_value above)
+    lambda: |-
+      float in_w = id(power_delivered_l1).state;
+      float out_w = id(power_returned_l1).state;
+      if (std::isnan(in_w)) in_w = 0.0f;     // phase missing from telegram → treat as 0
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  - platform: template
+    name: "Grid Power L2"
+    id: grid_l2
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float in_w = id(power_delivered_l2).state;
+      float out_w = id(power_returned_l2).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  - platform: template
+    name: "Grid Power L3"
+    id: grid_l3
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float in_w = id(power_delivered_l3).state;
+      float out_w = id(power_returned_l3).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  - platform: template
+    name: "Grid Power Total"
+    id: grid_power_total
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never        # recomputed once per telegram (after grid_l3)
+    lambda: |-
+      float total = 0.0f;
+      if (!std::isnan(id(grid_l1).state)) total += id(grid_l1).state;
+      if (!std::isnan(id(grid_l2).state)) total += id(grid_l2).state;
+      if (!std::isnan(id(grid_l3).state)) total += id(grid_l3).state;
+      return total;
+
+  # --- CT002 runtime state (live, via the component's public API) ---
   - platform: template
     name: "Batteries Connected"
     entity_category: diagnostic
@@ -301,6 +386,12 @@ sensor:
     lambda: |-
       auto v = id(ct002_main).latest_grid_power();
       return v.size() > 2 ? v[2] : 0.0f;
+
+binary_sensor:
+  - platform: template
+    name: "CT002 Active Control"
+    entity_category: diagnostic
+    lambda: "return id(ct002_main).active_control();"
 
 text_sensor:
   # --- Runtime identity ---
@@ -462,26 +553,98 @@ text_sensor:
     update_interval: 6h
     lambda: 'return std::string("${saturation_stall_timeout_seconds}");'
 
+# -----------------------------------------------------------------------------
+#  Marstek CT002 emulator. Three-phase: fed by the grid_l? sensors above.
+#  Tuning blocks are wired to the substitutions at the top of this file.
+# -----------------------------------------------------------------------------
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+
+  ct_type: HME-4                  # HME-4 = CT002, HME-3 = CT003
+  active_control: ${active_control}
+  max_sensor_age: ${max_sensor_age}
+
+  # ── Cross-phase signal conditioning (applied to the L1/L2/L3 vector) ──
+  filters:
+    hampel:
+      window: ${hampel_window}
+      n_sigma: ${hampel_n_sigma}
+      min_threshold: ${hampel_min_threshold}
+    smoothing:
+      alpha: ${smoothing_alpha}
+      max_step: ${smoothing_max_step}
+    deadband:
+      deadband: ${deadband}
+    # PID is an ALTERNATIVE controller — do NOT combine it with the balancer
+    # (active_control). Only enable this with active_control: "false".
+    # pid:
+    #   kp: 0.0
+    #   ki: 0.0
+    #   kd: 0.0
+    #   output_max: 800
+    #   mode: bias
+
+  # ── Multi-battery load balancer (runs when active_control is true) ──
+  balancer:
+    fair_distribution: ${fair_distribution}
+    balance_gain: ${balance_gain}
+    balance_deadband: ${balance_deadband}
+    error_boost_threshold: ${error_boost_threshold}
+    error_boost_max: ${error_boost_max}
+    error_reduce_threshold: ${error_reduce_threshold}
+    max_correction_per_step: ${max_correction_per_step}
+    max_target_step: ${max_target_step}
+    min_dc_output: ${min_dc_output}
+    min_efficient_power: ${min_efficient_power}
+    probe_min_power: ${probe_min_power}
+    efficiency_rotation_interval: ${efficiency_rotation_interval}
+    efficiency_fade_alpha: ${efficiency_fade_alpha}
+    efficiency_saturation_threshold: ${efficiency_saturation_threshold}
+
+  # ── Saturation tracker ──
+  saturation:
+    enabled: ${saturation_enabled}
+    alpha: ${saturation_alpha}
+    min_target: ${saturation_min_target}
+    decay_factor: ${saturation_decay_factor}
+    grace_seconds: ${saturation_grace_seconds}
+    stall_timeout_seconds: ${saturation_stall_timeout_seconds}
+
+  # ── MQTT insights — publishes HA Device Discovery for the per-battery state
+  #    (manual/auto target, active, distribution weight, …) and answers Marstek-
+  #    app polls on the broker. Requires the top-level mqtt: block above. ──
+  mqtt_insights:
+    base_topic: astrameter
+    ha_discovery: true
+    # device_id: device-1            # HA discovery node id (default matches add-on)
+    # marstek_mqtt_enabled: true     # answer Marstek-app polls on the broker
+
 # =============================================================================
-#  UPGRADING TO A NEW ASTRAMETER RELEASE
-#  -------------------------------------
-#  1. Read what changed first. Open the release notes and scan every entry
-#     between your current version and the target — especially any "Breaking"
-#     section and anything mentioning ESPHome / ct002 / a renamed key:
-#       https://github.com/tomquist/astrameter/releases
-#       https://github.com/tomquist/astrameter/blob/main/CHANGELOG.md
-#     (The ct002 ESPHome component is still flagged experimental, so its YAML
-#      schema can change between releases.)
-#  2. Bump `astrameter_version:` above to the new tag (e.g. "2.2.0").
-#  3. Validate WITHOUT flashing — this catches renamed/removed keys:
-#       esphome config astrameter-ct002-dsmr.yaml
-#  4. Build + flash:
-#       esphome run astrameter-ct002-dsmr.yaml
-#     If the new ref doesn't seem to take effect, clear the cached checkout:
-#       esphome clean astrameter-ct002-dsmr.yaml      # wipes .esphome build cache
-#  5. Roll back any time by setting `astrameter_version:` back to the old tag
-#     and re-flashing — pinned tags make every build reproducible.
+#  UPGRADING
+#  ---------
+#  AstraMeter (the ct002 component):
+#    1. Check releases: https://github.com/tomquist/astrameter/releases
+#    2. Read the CHANGELOG between your version and the target — especially any
+#       "Breaking" section and ESPHome / ct002 / renamed-key notes (the ct002
+#       ESPHome component is experimental; its schema can change).
+#    3. Bump `astrameter_version:` above to the new tag.
+#    4. Validate:  esphome config astrameter-ct002-dsmr.yaml   (catches key changes)
+#    5. Compile:   esphome compile astrameter-ct002-dsmr.yaml  (the CT002 runtime/
+#       settings entities call the component's C++ API — a renamed accessor only
+#       fails here, not at config).
+#    6. Flash:     esphome run astrameter-ct002-dsmr.yaml
+#    7. Roll back by reverting `astrameter_version:` — pinned tags = reproducible.
 #
-#  Tip: keep ESPHome itself current (`pip install -U esphome` or update the
-#  add-on) before a big component bump — new ct002 keys may need a newer ESPHome.
+#  Tailscale component (esphome-tailscale):
+#    `ref: main` + `refresh: 0s` re-fetches the latest main on EVERY build — handy
+#    but unpredictable. For a stable device, pin `ref:` to a commit:
+#      git ls-remote https://github.com/Csontikka/esphome-tailscale main
+#    then set ref: to that SHA, run `esphome clean` + `esphome compile`, flash, and
+#    confirm "VPN Connected" + that key-expiry is still disabled in the admin console.
+#
+#  ESPHome itself: `pip install -U esphome` (or update the add-on) before a big
+#  component bump; re-run `esphome config` to surface deprecations.
 # =============================================================================

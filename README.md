@@ -57,7 +57,7 @@ battery UDP poll.
 ```mermaid
 flowchart TB
     subgraph esp["ESP32-S3 — this config"]
-        PKG["common/dsmr-p1-reader.yaml<br/>board · W5500 · P1 UART · DSMR · sensors"]
+        PKG["DSMR P1 reader<br/>board · W5500 · UART · sensors"]
         CT["ct002 emulator<br/>filters · balancer · saturation"]
         WEB["web_server + OTA upload"]
         TS["Tailscale node"]
@@ -73,10 +73,10 @@ flowchart TB
     TS -. "remote web UI" .-> PH
 ```
 
-The hardware + meter-reading half lives in a shared package (`common/dsmr-p1-reader.yaml`)
-so the device config stays focused on the emulator, web UI, VPN, and MQTT. The device runs
-**fully standalone** — Home Assistant is optional, and `reboot_timeout: 0s` on both `api:`
-and `mqtt:` keeps it alive even if HA or the broker is unreachable.
+Everything is in **one self-contained file** (`astrameter-ct002-dsmr.yaml`) — copy
+`secrets.yaml` and flash, no extra includes to manage. The device runs **fully standalone**:
+Home Assistant is optional, and `reboot_timeout: 0s` on both `api:` and `mqtt:` keeps it
+alive even if HA or the broker is unreachable.
 
 ## Hardware
 
@@ -109,10 +109,10 @@ The P1 port is an **RJ12 (6P6C)** socket. Connect 4 of its 6 wires:
 **Why the pull-up + inversion:** the P1 data line is open-collector and logically inverted.
 The 10 kΩ pull-up to 3V3 sets the idle level, and `inverted: true` on the UART RX pin flips
 it back in software. If you use a **ready-made P1 cable with a built-in inverter**, set
-`inverted: false` in `common/dsmr-p1-reader.yaml` and omit the external resistor.
+`inverted: false` in the `uart:` block and omit the external resistor.
 
-The P1 pins (`dsmr_rx_pin`, `dsmr_request_pin`, `dsmr_baud_rate`) are substitutions in the
-shared package — override them in the device file if your wiring differs.
+The P1 pins (`dsmr_rx_pin`, `dsmr_request_pin`, `dsmr_baud_rate`) are substitutions at the
+top of the config — change them if your wiring differs.
 
 ## GPIO usage
 
@@ -150,8 +150,7 @@ MagicDNS name. The MQTT connection to Home Assistant's broker also rides the tun
 
 | File | Purpose |
 |------|---------|
-| [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml) | The device: DSMR reader + CT002 emulator + web UI + Tailscale + MQTT |
-| [`common/dsmr-p1-reader.yaml`](common/dsmr-p1-reader.yaml) | Shared package: board, Ethernet, P1 UART, DSMR + all meter sensors |
+| [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml) | The entire device, self-contained: board, Ethernet, P1/DSMR reader, meter sensors, CT002 emulator, web UI, Tailscale, MQTT |
 | [`secrets.yaml.example`](secrets.yaml.example) | Template for `secrets.yaml` (which is gitignored) |
 | [`docs/wiring.svg`](docs/wiring.svg) | P1 wiring diagram |
 
