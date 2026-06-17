@@ -102,13 +102,16 @@ psram:
 logger:
   level: INFO
 
-# Wall-clock time via SNTP. Tailscale's WireGuard/control-plane TLS needs a sane
-# clock, and MQTT/TLS handshakes fail until time is set — so don't rely on the
-# Tailscale package to bring its own. Uses the pool defaults; the device reaches
-# them over Ethernet at boot. (Harmless if another component also syncs time.)
+# Wall-clock time via SNTP — Tailscale's WireGuard/control-plane TLS needs a sane
+# clock, and MQTT/TLS handshakes fail until time is set. The Tailscale package below
+# ALSO defines an SNTP source (id: tailscale_time, with pool servers + CET timezone),
+# and ESPHome's SNTP is a single global lwIP instance — so we reuse that SAME id here
+# instead of declaring a second one. (Two `time: sntp` blocks with different ids is a
+# hard config error; matching ids merge into one.) The device reaches the servers
+# over Ethernet at boot.
 time:
   - platform: sntp
-    id: sntp_time
+    id: tailscale_time
 
 # Native API for Home Assistant — OPTIONAL. This device runs FULLY STANDALONE
 # without HA: DSMR → ct002 (UDP), the web UI, and Tailscale all work with no API
