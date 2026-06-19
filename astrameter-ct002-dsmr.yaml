@@ -100,7 +100,9 @@ psram:
   speed: 80MHz
 
 logger:
-  level: INFO
+  level: DEBUG       # TEMP DIAGNOSTIC — revert to INFO once P1 reads
+  logs:
+    dsmr: DEBUG      # logs telegram receipt + CRC failures
 
 # Wall-clock time via SNTP is REQUIRED — Tailscale's WireGuard/control-plane TLS and
 # MQTT/TLS handshakes both fail until the clock is set. It is provided by the Tailscale
@@ -231,6 +233,13 @@ uart:
     number: ${dsmr_rx_pin}
     inverted: true
   rx_buffer_size: 1700       # one SMR5 telegram is large; give it room
+  debug:                     # TEMP DIAGNOSTIC — passive RX tap; remove once P1 reads
+    direction: RX
+    dummy_receiver: false    # false = don't consume bytes; dsmr still reads them
+    after:
+      delimiter: "\n"
+    sequence:
+      - lambda: UARTDebug::log_string(direction, bytes);
 
 dsmr:
   id: dsmr_instance
