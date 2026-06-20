@@ -68,7 +68,7 @@ substitutions:
   max_correction_per_step: "80"
   max_target_step: "0"          # 0 = no per-step target clamp
   min_dc_output: "0"            # >0 keeps a DC battery (B2500) inverter awake
-  min_efficient_power: "0"      # >0 enables efficiency rotation
+  min_efficient_power: "900"      # >0 enables efficiency rotation
   probe_min_power: "80"
   efficiency_rotation_interval: "15min"
   efficiency_fade_alpha: "0.15"
@@ -89,9 +89,9 @@ substitutions:
 packages:
   astrameter_base:
     url: https://github.com/Maart3nL/esphome-astrameter-dsmr
-    ref: main                                       # pin to a tag/commit for reproducible builds
+    ref: main                                  # tracks branch tip (always latest); pin to a tag/SHA for reproducible builds
     files: [packages/astrameter-ct002-dsmr.base.yaml]
-    refresh: 1d                                     # re-fetch cadence; use `never` once pinned to a tag/SHA
+    refresh: 0s                              # 0s = always re-fetch the latest main on every compile
 
   # --- Local iteration (no push needed): comment out the block above and
   #     uncomment the line below to build from your working copy instead. ---
