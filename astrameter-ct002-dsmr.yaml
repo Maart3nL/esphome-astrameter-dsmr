@@ -16,6 +16,10 @@ substitutions:
   name: astrameter-ct002-dsmr
   friendly_name: "AstraMeter CT002 (DSMR)"
 
+  # CT002 presented MAC. "" mirrors each battery's own CT MAC (default), or set
+  # a fixed 12-hex MAC (':' / '-' separators allowed), e.g. "28848553928c".
+  ct_mac: ""
+
   # AstraMeter release to build against. Bump this ONE line to upgrade, then
   # re-validate + re-flash (see the upgrade steps at the bottom of this file).
   # Releases: https://github.com/tomquist/astrameter/releases
@@ -578,7 +582,7 @@ ct002:
   power_sensor_l3: grid_l3
 
   ct_type: HME-4                  # HME-4 = CT002, HME-3 = CT003
-  ct_mac: !secret ct_mac          # "" = mirror per battery (default); or a 12-hex MAC (':'/'-' ok)
+  ct_mac: ${ct_mac}          # "" = mirror per battery (default); or a 12-hex MAC (':'/'-' ok)
   active_control: ${active_control}
   max_sensor_age: ${max_sensor_age}
 
