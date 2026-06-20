@@ -9,7 +9,7 @@
 #  How it fits together:
 #    • substitutions  → everything settable; these override the base's ${...} refs
 #    • packages       → fetches the bulk (packages/astrameter-ct002-dsmr.base.yaml)
-#    • secrets.yaml   → resolves every !secret in the fetched base (stays local)
+#    • secrets.yaml   → resolved here into the secret substitutions (stays local)
 #
 #  IMPORTANT: the base file must be reachable at the `ref:` below. Once you push it
 #  to GitHub this builds as-is. For local iteration BEFORE pushing, comment out the
@@ -30,8 +30,21 @@ substitutions:
   # Always pin a tag (reproducible). Use a branch like "main" only for testing.
   astrameter_version: "2.1.2"
 
-  # (Web login, API key, OTA password, MQTT broker/creds and the Tailscale key
-  #  all live in secrets.yaml beside this file — referenced below with !secret.)
+  # --- Secrets: resolved from secrets.yaml here and passed into the remote base
+  #     as substitutions (ESPHome forbids !secret inside remote packages). ---
+  api_encryption_key: !secret api_encryption_key
+  ota_password: !secret ota_password
+  web_username: !secret web_username
+  web_password: !secret web_password
+  mqtt_broker: !secret mqtt_broker
+  mqtt_username: !secret mqtt_username
+  mqtt_password: !secret mqtt_password
+  tailscale_auth_key: !secret tailscale_auth_key
+  # Optional static IP — only if you uncomment manual_ip in the base:
+  # static_ip: !secret static_ip
+  # gateway: !secret gateway
+  # subnet: !secret subnet
+  # dns1: !secret dns1
 
   # ── P1 wiring (Waveshare board defaults; change if your wiring differs) ──
   dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) → ESP RX (10k pull-up to 3V3)
@@ -87,8 +100,8 @@ substitutions:
   saturation_stall_timeout_seconds: "60s"
 
 # -----------------------------------------------------------------------------
-#  Bulk config, hosted on GitHub. The substitutions above feed every ${...} in it;
-#  !secret refs inside it resolve against THIS directory's secrets.yaml.
+#  Bulk config, hosted on GitHub. The substitutions above (including the secret
+#  values) feed every ${...} in it; the base contains no !secret of its own.
 # -----------------------------------------------------------------------------
 packages:
   astrameter_base:

@@ -6,10 +6,11 @@
 #  from a thin per-device entrypoint that supplies the substitutions
 #  (see astrameter-ct002-dsmr.v2.yaml).
 #
-#  This file is NOT standalone: every tunable is a ${substitution} provided by the
-#  consumer, so a missing one fails the build by design. All !secret references
-#  resolve against the CONSUMER's local secrets.yaml (the file next to the
-#  entrypoint) — no secrets ever live here, which is what makes it safe to host.
+#  This file is NOT standalone: every value is a ${substitution} provided by the
+#  consumer (the entrypoint), so a missing one fails the build by design. Secrets
+#  are passed the same way — the entrypoint resolves them from its local
+#  secrets.yaml and feeds them in, because ESPHome forbids !secret inside remote
+#  packages. No secret values ever live here, which is what makes it safe to host.
 #
 #  V1 (astrameter-ct002-dsmr.yaml) remains the single-file, self-contained option;
 #  this base is byte-for-byte its body with the substitutions block lifted out.
@@ -55,12 +56,12 @@ logger:
 # reachable. Delete this block entirely if you never use Home Assistant.
 api:
   encryption:
-    key: !secret api_encryption_key
+    key: ${api_encryption_key}
   reboot_timeout: 0s
 
 ota:
   - platform: esphome        # ESPHome dashboard / CLI OTA (esphome run)
-    password: !secret ota_password
+    password: ${ota_password}
   - platform: web_server     # enables the "Upload firmware" form in the web UI below
 
 # Built-in web interface — http://<device-ip>/ (and remotely via Tailscale).
@@ -72,8 +73,8 @@ web_server:
   version: 2
   local: true
   auth:
-    username: !secret web_username
-    password: !secret web_password
+    username: ${web_username}
+    password: ${web_password}
 
 # -----------------------------------------------------------------------------
 #  AstraMeter CT002 emulator component (pulled from GitHub).
@@ -109,7 +110,7 @@ packages:
     refresh: 1d
 
 tailscale:
-  auth_key: !secret tailscale_auth_key
+  auth_key: ${tailscale_auth_key}
   hostname: ${name}            # MagicDNS name → reach the UI at http://${name}/
 
 # -----------------------------------------------------------------------------
@@ -130,10 +131,10 @@ ethernet:
   # a real address never lands in the public config (uncomment BOTH this block and
   # the matching keys in secrets.yaml):
   # manual_ip:
-  #   static_ip: !secret static_ip
-  #   gateway: !secret gateway
-  #   subnet: !secret subnet
-  #   dns1: !secret dns1
+  #   static_ip: ${static_ip}
+  #   gateway: ${gateway}
+  #   subnet: ${subnet}
+  #   dns1: ${dns1}
 
 # -----------------------------------------------------------------------------
 #  MQTT — Home Assistant's Mosquitto, reached OVER the Tailscale tunnel.
@@ -149,10 +150,10 @@ ethernet:
 #  on a microcontroller) or its MagicDNS name.
 # -----------------------------------------------------------------------------
 mqtt:
-  broker: !secret mqtt_broker
+  broker: ${mqtt_broker}
   port: 1883
-  username: !secret mqtt_username
-  password: !secret mqtt_password
+  username: ${mqtt_username}
+  password: ${mqtt_password}
   discovery: false
   reboot_timeout: 0s
 
