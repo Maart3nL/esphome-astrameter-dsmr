@@ -1,0 +1,98 @@
+# =============================================================================
+#  AstraMeter CT002 (DSMR) — V2 ENTRYPOINT  (thin, per-device)
+#  -----------------------------------------------------------------------------
+#  The bulk of the config lives on GitHub and is pulled in by the packages: block
+#  at the BOTTOM of this file. Everything you'd normally tune stays HERE as
+#  substitutions — edit these, keep your secrets in secrets.yaml, then flash:
+#      esphome run astrameter-ct002-dsmr.v2.yaml
+#
+#  How it fits together:
+#    • substitutions  → everything settable; these override the base's ${...} refs
+#    • packages       → fetches the bulk (packages/astrameter-ct002-dsmr.base.yaml)
+#    • secrets.yaml   → resolves every !secret in the fetched base (stays local)
+#
+#  IMPORTANT: the base file must be reachable at the `ref:` below. Once you push it
+#  to GitHub this builds as-is. For local iteration BEFORE pushing, comment out the
+#  remote `astrameter_base:` block and use the !include line instead (see bottom).
+# =============================================================================
+
+substitutions:
+  name: astrameter-ct002-dsmr
+  friendly_name: "AstraMeter CT002 (DSMR)"
+
+  # AstraMeter release to build against. Bump this ONE line to upgrade, then
+  # re-validate + re-flash (see the upgrade steps at the bottom of this file).
+  # Releases: https://github.com/tomquist/astrameter/releases
+  # Always pin a tag (reproducible). Use a branch like "main" only for testing.
+  astrameter_version: "2.1.2"
+
+  # (Web login, API key, OTA password, MQTT broker/creds and the Tailscale key
+  #  all live in secrets.yaml beside this file — referenced below with !secret.)
+
+  # ── P1 wiring (Waveshare board defaults; change if your wiring differs) ──
+  dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) → ESP RX (10k pull-up to 3V3)
+  dsmr_request_pin: GPIO17      # P1 "Data Request" / RTS (RJ12 pin 2), driven HIGH
+  dsmr_baud_rate: "115200"      # DSMR 5.x = 115200 8N1 (older DSMR 2/3 = 9600)
+
+  # ===========================================================================
+  #  ct002 TUNING VARIABLES  (compile-time — edit a value, then `esphome run`
+  #  to re-flash; the ct002 component bakes these in at build time, so they are
+  #  NOT live-adjustable from Home Assistant). All values below reproduce the
+  #  component defaults, so changing them is the only thing that changes behaviour.
+  # ===========================================================================
+
+  # ── ct002 core ─────────────────────────────────────────────────
+  active_control: "true"        # true = balancer steers batteries toward zero grid
+                                # false = forward the raw grid reading as-is
+  max_sensor_age: "30s"         # treat input as 0 W if no telegram arrives within this
+
+  # ── filters › hampel (cross-phase outlier rejection) ───────────
+  hampel_window: "7"            # sample window
+  hampel_n_sigma: "3.0"         # reject samples deviating > n_sigma·MAD
+  hampel_min_threshold: "50"    # …but never below this many W (keeps clean signal intact)
+
+  # ── filters › smoothing (EMA) ──────────────────────────────────
+  smoothing_alpha: "1.0"        # 1.0 = no smoothing (pass-through); lower (~0.3) = smoother
+  smoothing_max_step: "0"       # 0 = no per-step clamp; e.g. 200 = cap change to 200 W/step
+
+  # ── filters › deadband ─────────────────────────────────────────
+  deadband: "0"                 # 0 = off; e.g. 10 zeros out |grid sum| < 10 W
+
+  # ── balancer (multi-battery load split; active when active_control: true) ──
+  fair_distribution: "true"
+  balance_gain: "0.2"
+  balance_deadband: "15"
+  error_boost_threshold: "150"
+  error_boost_max: "0.5"
+  error_reduce_threshold: "20"
+  max_correction_per_step: "80"
+  max_target_step: "0"          # 0 = no per-step target clamp
+  min_dc_output: "0"            # >0 keeps a DC battery (B2500) inverter awake
+  min_efficient_power: "0"      # >0 enables efficiency rotation
+  probe_min_power: "80"
+  efficiency_rotation_interval: "15min"
+  efficiency_fade_alpha: "0.15"
+  efficiency_saturation_threshold: "0.4"
+
+  # ── saturation tracker (backs off a battery that can't follow its target) ──
+  saturation_enabled: "true"
+  saturation_alpha: "0.15"
+  saturation_min_target: "20"
+  saturation_decay_factor: "0.995"
+  saturation_grace_seconds: "90s"
+  saturation_stall_timeout_seconds: "60s"
+
+# -----------------------------------------------------------------------------
+#  Bulk config, hosted on GitHub. The substitutions above feed every ${...} in it;
+#  !secret refs inside it resolve against THIS directory's secrets.yaml.
+# -----------------------------------------------------------------------------
+packages:
+  astrameter_base:
+    url: https://github.com/Maart3nL/esphome-astrameter-dsmr
+    ref: main                                       # pin to a tag/commit for reproducible builds
+    files: [packages/astrameter-ct002-dsmr.base.yaml]
+    refresh: 1d                                     # re-fetch cadence; use `never` once pinned to a tag/SHA
+
+  # --- Local iteration (no push needed): comment out the block above and
+  #     uncomment the line below to build from your working copy instead. ---
+  # astrameter_base: !include packages/astrameter-ct002-dsmr.base.yaml

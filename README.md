@@ -78,6 +78,22 @@ Everything is in **one self-contained file** (`astrameter-ct002-dsmr.yaml`) — 
 Home Assistant is optional, and `reboot_timeout: 0s` on both `api:` and `mqtt:` keeps it
 alive even if HA or the broker is unreachable.
 
+### Two ways to flash: single-file (V1) or split (V2)
+
+Both build **identical firmware** — pick whichever layout you prefer:
+
+- **V1 — [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml):** everything in one
+  self-contained file. Edit anything locally, no GitHub round-trip.
+- **V2 — [`astrameter-ct002-dsmr.v2.yaml`](astrameter-ct002-dsmr.v2.yaml):** a thin
+  per-device entrypoint that holds only the settable **substitutions** and pulls the bulk
+  from this repo as an ESPHome **package**
+  ([`packages/astrameter-ct002-dsmr.base.yaml`](packages/astrameter-ct002-dsmr.base.yaml))
+  at a pinned `ref:`. Secrets still resolve from your **local** `secrets.yaml`; the hosted
+  base contains none.
+
+Choose V2 if you run several devices off a shared base, or want bulk changes to land via
+git; choose V1 for a single self-contained file.
+
 ## Hardware
 
 | Spec | Value |
@@ -150,7 +166,9 @@ MagicDNS name. The MQTT connection to Home Assistant's broker also rides the tun
 
 | File | Purpose |
 |------|---------|
-| [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml) | The entire device, self-contained: board, Ethernet, P1/DSMR reader, meter sensors, CT002 emulator, web UI, Tailscale, MQTT |
+| [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml) | **V1 (single-file)** — the entire device, self-contained: board, Ethernet, P1/DSMR reader, meter sensors, CT002 emulator, web UI, Tailscale, MQTT |
+| [`astrameter-ct002-dsmr.v2.yaml`](astrameter-ct002-dsmr.v2.yaml) | **V2 entrypoint** — thin per-device file: just the settable substitutions + a `packages:` link to the base below |
+| [`packages/astrameter-ct002-dsmr.base.yaml`](packages/astrameter-ct002-dsmr.base.yaml) | **V2 base package** — the bulk (everything in V1 except substitutions), consumed remotely; holds no secrets |
 | [`secrets.yaml.example`](secrets.yaml.example) | Template for `secrets.yaml` (which is gitignored) |
 | [`docs/wiring.svg`](docs/wiring.svg) | P1 wiring diagram |
 
@@ -161,6 +179,8 @@ git clone https://github.com/Maart3nL/esphome-astrameter-dsmr.git
 cd esphome-astrameter-dsmr
 cp secrets.yaml.example secrets.yaml      # then fill in the values
 esphome run astrameter-ct002-dsmr.yaml    # first flash over USB; later flashes via OTA/web UI
+# …or the split layout (bulk fetched from GitHub — see "Two ways to flash"):
+# esphome run astrameter-ct002-dsmr.v2.yaml
 ```
 
 Fill in `secrets.yaml`:
