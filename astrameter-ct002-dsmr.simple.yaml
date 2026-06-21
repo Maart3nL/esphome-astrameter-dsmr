@@ -122,11 +122,8 @@ sensor:
       id: power_returned_l3
       internal: true
       on_value:
-        # ASSUMES A 3-PHASE METER: grid_l3 + the Total recompute hang off L3, so on
-        # a 1-phase meter move the grid_power_total update onto power_returned_l1.
         then:
           - component.update: grid_l3
-          - component.update: grid_power_total
 
   - platform: template
     name: "Grid Power L1"
@@ -172,21 +169,6 @@ sensor:
       if (std::isnan(in_w)) in_w = 0.0f;
       if (std::isnan(out_w)) out_w = 0.0f;
       return (in_w - out_w) * 1000.0f;
-
-  - platform: template
-    name: "Grid Power Total"
-    id: grid_power_total
-    unit_of_measurement: W
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 0
-    update_interval: never
-    lambda: |-
-      float total = 0.0f;
-      if (!std::isnan(id(grid_l1).state)) total += id(grid_l1).state;
-      if (!std::isnan(id(grid_l2).state)) total += id(grid_l2).state;
-      if (!std::isnan(id(grid_l3).state)) total += id(grid_l3).state;
-      return total;
 
 # -----------------------------------------------------------------------------
 #  Marstek CT002 emulator — three-phase, fed by grid_l1/l2/l3. Uses the
