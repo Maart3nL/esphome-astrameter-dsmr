@@ -169,6 +169,7 @@ MagicDNS name. The MQTT connection to Home Assistant's broker also rides the tun
 | [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml) | **V1 (single-file)** — the entire device, self-contained: board, Ethernet, P1/DSMR reader, meter sensors, CT002 emulator, web UI, Tailscale, MQTT |
 | [`astrameter-ct002-dsmr.v2.yaml`](astrameter-ct002-dsmr.v2.yaml) | **V2 entrypoint** — thin per-device file: just the settable substitutions + a `packages:` link to the base below |
 | [`packages/astrameter-ct002-dsmr.base.yaml`](packages/astrameter-ct002-dsmr.base.yaml) | **V2 base package** — the bulk (everything in V1 except substitutions), consumed remotely; holds no secrets |
+| [`astrameter-ct002-dsmr.simple.yaml`](astrameter-ct002-dsmr.simple.yaml) | **Simple** — minimal standalone build: DSMR → CT002 over Ethernet, with API + OTA. No Tailscale/VPN, web server or MQTT; ct002 on built-in defaults |
 | [`secrets.yaml.example`](secrets.yaml.example) | Template for `secrets.yaml` (which is gitignored) |
 | [`docs/wiring.svg`](docs/wiring.svg) | P1 wiring diagram |
 
