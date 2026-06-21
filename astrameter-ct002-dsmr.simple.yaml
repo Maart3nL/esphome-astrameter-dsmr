@@ -197,15 +197,17 @@ ct002:
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device → fixed dBm)
   balancer:
     min_efficient_power: 900  # >0 enables efficiency rotation (everything else stays default)
-    import_trim_w: 25         # cover the few W the Marstek firmware parks importing (default 15)
-    # Aggressive zero-grid tracking. With one battery per phase the inter-battery
-    # knobs (max_correction_per_step, balance_gain, error_boost*, concentrate_deadband)
-    # are inert — pacing is the real per-poll gain limiter, so raise the pace caps to
-    # crush import fast. The grid predictor + osc-damp + the pace soft-landing (the cap
-    # follows the error back down as it shrinks) keep the approach from overshooting 0W
-    # into export. Back the caps off if you see export blips on load drops.
-    pace_base_step: 80        # punchy first-poll step (default 30)
-    pace_max_step: 250        # faster sustained slew toward 0W (default 100)
+    # 2.2.0 rewrote active control with an adaptive grid predictor + ramp pacing +
+    # oscillation damping + steady-import trim — all tuned for LAGGY meters (multi-second
+    # Home Assistant push sensors) and MULTIPLE batteries per phase. This setup is the
+    # opposite: a fast, clean 1Hz DSMR read directly, with one Venus E per phase. There
+    # that machinery only adds reaction lag and overshoot (slow ramp + ±2kW swings on a
+    # load step). Zeroing these four falls back to the 2.1.2 controller — act on the raw
+    # meter and send the full correction immediately (crisp response, grid tight to 0W).
+    grid_predict_trust: 0     # 0 = act on the raw meter, no predictor lag (default 0.5)
+    pace_base_step: 0         # 0 = no ramp pacing; full correction per poll (default 30)
+    osc_damp_max: 0           # 0 = no oscillation damping (default 0.95)
+    import_trim_w: 0          # 0 = no steady-import trim; 2.1.2 had none (default 15)
   # Opt-in status reporting to the HAME/Marstek cloud (uses the http_request: above).
   cloud_reporting:
     host: eu.hamedata.com     # cloud endpoint (default)
