@@ -557,6 +557,7 @@ ct002:
   ct_type: HME-4                  # HME-4 = CT002, HME-3 = CT003
   ct_mac: ${ct_mac}          # "" = mirror per battery (default); or a 12-hex MAC (':'/'-' ok)
   active_control: ${active_control}
+  wifi_rssi: ${wifi_rssi}
   max_sensor_age: ${max_sensor_age}
 
   # ── Cross-phase signal conditioning (applied to the L1/L2/L3 vector) ──

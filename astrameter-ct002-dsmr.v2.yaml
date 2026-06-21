@@ -62,6 +62,7 @@ substitutions:
   active_control: "true"        # true = balancer steers batteries toward zero grid
                                 # false = forward the raw grid reading as-is
   max_sensor_age: "30s"         # treat input as 0 W if no telegram arrives within this
+  wifi_rssi: "-50"              # reported WiFi RSSI (Ethernet device, fixed dBm)
 
   # ── filters › hampel (cross-phase outlier rejection) ───────────
   hampel_window: "7"            # sample window
