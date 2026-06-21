@@ -92,8 +92,12 @@ dsmr:
   max_telegram_length: 1700
 
 # -----------------------------------------------------------------------------
-#  Net grid power per phase in Watt (+ import / − export), fed to ct002. Each
-#  power_returned_l? fires once per telegram and recomputes its grid_l? value.
+#  Net grid power per phase in Watt, fed to ct002. The P1 telegram always carries
+#  all three phases, and per phase exactly one side is non-zero: importing ->
+#  power_delivered_l? > 0 (returned 0); exporting -> power_returned_l? > 0
+#  (delivered 0). So net = delivered - returned (kW -> W): + = import, - = export.
+#  Each power_returned_l? recomputes its grid_l? once per telegram, independently
+#  (one phase can export while another imports).
 # -----------------------------------------------------------------------------
 sensor:
   - platform: dsmr
@@ -134,11 +138,7 @@ sensor:
     accuracy_decimals: 0
     update_interval: never
     lambda: |-
-      float in_w = id(power_delivered_l1).state;
-      float out_w = id(power_returned_l1).state;
-      if (std::isnan(in_w)) in_w = 0.0f;
-      if (std::isnan(out_w)) out_w = 0.0f;
-      return (in_w - out_w) * 1000.0f;
+      return (id(power_delivered_l1).state - id(power_returned_l1).state) * 1000.0f;
 
   - platform: template
     name: "Grid Power L2"
@@ -149,11 +149,7 @@ sensor:
     accuracy_decimals: 0
     update_interval: never
     lambda: |-
-      float in_w = id(power_delivered_l2).state;
-      float out_w = id(power_returned_l2).state;
-      if (std::isnan(in_w)) in_w = 0.0f;
-      if (std::isnan(out_w)) out_w = 0.0f;
-      return (in_w - out_w) * 1000.0f;
+      return (id(power_delivered_l2).state - id(power_returned_l2).state) * 1000.0f;
 
   - platform: template
     name: "Grid Power L3"
@@ -164,11 +160,7 @@ sensor:
     accuracy_decimals: 0
     update_interval: never
     lambda: |-
-      float in_w = id(power_delivered_l3).state;
-      float out_w = id(power_returned_l3).state;
-      if (std::isnan(in_w)) in_w = 0.0f;
-      if (std::isnan(out_w)) out_w = 0.0f;
-      return (in_w - out_w) * 1000.0f;
+      return (id(power_delivered_l3).state - id(power_returned_l3).state) * 1000.0f;
 
 # -----------------------------------------------------------------------------
 #  Marstek CT002 emulator — three-phase, fed by grid_l1/l2/l3. Uses the
