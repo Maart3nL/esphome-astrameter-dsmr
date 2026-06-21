@@ -435,6 +435,21 @@ switch:
           tag: astrameter.mqtt_insights
           level: INFO
 
+# -----------------------------------------------------------------------------
+#  Button to disable Tailscale and stop it auto-connecting. It turns the
+#  "VPN Enabled" switch OFF; that switch is NVS-persisted (RESTORE_DEFAULT_OFF),
+#  so the VPN stays down across reboots until you switch it back on (or use the
+#  VPN Reconnect button). Also disconnects the current session immediately.
+# -----------------------------------------------------------------------------
+button:
+  - platform: template
+    name: "VPN Disable (stop auto-connect)"
+    id: vpn_disable_autoconnect
+    icon: "mdi:lan-disconnect"
+    entity_category: config
+    on_press:
+      - switch.turn_off: tailscale_vpn_enabled
+
 text_sensor:
   # --- Runtime identity ---
   - platform: template

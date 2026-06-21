@@ -221,7 +221,9 @@ Assistant:
   (marked diagnostic so HA tucks them away).
 - **Controls:** `CT002 Debug Log` switch — turns ct002/AstraMeter `DEBUG` logging on/off
   at runtime (off by default; the global logger ceiling is `DEBUG` so the switch can
-  raise it, but every tag stays at `INFO` until you flip it).
+  raise it, but every tag stays at `INFO` until you flip it). `VPN Disable (stop
+  auto-connect)` button — turns the Tailscale "VPN Enabled" switch off (persisted), so
+  the VPN stays down across reboots until you switch it back on.
 - **Tailscale:** `VPN Connected`, `VPN IP`, `VPN Peers`, `Device Memory`, a `Reboot`
   button, and more (provided by the Tailscale package).
 
