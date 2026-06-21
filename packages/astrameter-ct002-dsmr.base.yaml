@@ -38,7 +38,15 @@ psram:
   speed: 80MHz
 
 logger:
-  level: INFO
+  # DEBUG here is only the compile-time ceiling — it lets the "CT002 Debug Log"
+  # switch raise the ct002 tags to DEBUG at runtime. By default every tag stays at
+  # INFO (so ct002 debug is OFF), and the Tailscale/ESP-IDF flood is held down too.
+  level: DEBUG
+  logs:
+    ct002: INFO                     # OFF by default; CT002 Debug Log switch flips these to DEBUG
+    marstek_registration: INFO
+    astrameter.mqtt_insights: INFO
+    esp-idf: INFO                   # silence Tailscale/WireGuard/DERP + mqtt_task spam
 
 # Wall-clock time via SNTP is REQUIRED — Tailscale's WireGuard/control-plane TLS and
 # MQTT/TLS handshakes both fail until the clock is set. It is provided by the Tailscale
@@ -326,6 +334,40 @@ binary_sensor:
     name: "CT002 Active Control"
     entity_category: diagnostic
     lambda: "return id(ct002_main).active_control();"
+
+# -----------------------------------------------------------------------------
+#  Runtime debug toggle for the CT002 / AstraMeter component (mirrors the
+#  Tailscale "VPN Debug Log" switch). OFF by default; turning it on raises the
+#  ct002 / marstek_registration / astrameter.mqtt_insights log tags to DEBUG.
+# -----------------------------------------------------------------------------
+switch:
+  - platform: template
+    name: "CT002 Debug Log"
+    id: ct002_debug_log
+    icon: "mdi:bug"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.set_level:
+          tag: ct002
+          level: DEBUG
+      - logger.set_level:
+          tag: marstek_registration
+          level: DEBUG
+      - logger.set_level:
+          tag: astrameter.mqtt_insights
+          level: DEBUG
+    turn_off_action:
+      - logger.set_level:
+          tag: ct002
+          level: INFO
+      - logger.set_level:
+          tag: marstek_registration
+          level: INFO
+      - logger.set_level:
+          tag: astrameter.mqtt_insights
+          level: INFO
 
 text_sensor:
   # --- Runtime identity ---

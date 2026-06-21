@@ -219,6 +219,9 @@ Assistant:
   `CT002 Grid Input L1/L2/L3` (post-filter), `CT002 Type`, `CT002 MAC`.
 - **CT002 settings:** every configured tuning value as a read-only `Setting · …` entity
   (marked diagnostic so HA tucks them away).
+- **Controls:** `CT002 Debug Log` switch — turns ct002/AstraMeter `DEBUG` logging on/off
+  at runtime (off by default; the global logger ceiling is `DEBUG` so the switch can
+  raise it, but every tag stays at `INFO` until you flip it).
 - **Tailscale:** `VPN Connected`, `VPN IP`, `VPN Peers`, `Device Memory`, a `Reboot`
   button, and more (provided by the Tailscale package).
 
