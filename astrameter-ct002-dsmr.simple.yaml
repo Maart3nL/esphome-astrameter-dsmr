@@ -146,7 +146,11 @@ sensor:
     accuracy_decimals: 0
     update_interval: never
     lambda: |-
-      return (id(power_delivered_l1).state - id(power_returned_l1).state) * 1000.0f;
+      float in_w = id(power_delivered_l1).state;
+      float out_w = id(power_returned_l1).state;
+      if (std::isnan(in_w)) in_w = 0.0f;     // phase missing from telegram → treat as 0
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
 
   - platform: template
     name: "Grid Power L2"
@@ -157,7 +161,11 @@ sensor:
     accuracy_decimals: 0
     update_interval: never
     lambda: |-
-      return (id(power_delivered_l2).state - id(power_returned_l2).state) * 1000.0f;
+      float in_w = id(power_delivered_l2).state;
+      float out_w = id(power_returned_l2).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
 
   - platform: template
     name: "Grid Power L3"
@@ -168,7 +176,11 @@ sensor:
     accuracy_decimals: 0
     update_interval: never
     lambda: |-
-      return (id(power_delivered_l3).state - id(power_returned_l3).state) * 1000.0f;
+      float in_w = id(power_delivered_l3).state;
+      float out_w = id(power_returned_l3).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
 
 # -----------------------------------------------------------------------------
 #  Marstek CT002 emulator — three-phase, fed by grid_l1/l2/l3. Uses the
@@ -180,10 +192,17 @@ ct002:
   power_sensor_l2: grid_l2
   power_sensor_l3: grid_l3
   ct_type: HME-4              # HME-4 = CT002, HME-3 = CT003
+  ct_mac: !secret ct_mac      # "" = mirror each battery's own CT MAC; or a fixed 12-hex MAC (':'/'-' ok)
   active_control: true        # balancer steers the batteries toward zero grid
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device → fixed dBm)
   balancer:
     min_efficient_power: 900  # >0 enables efficiency rotation (everything else stays default)
+    import_trim_w: 25         # cover the few W the Marstek firmware parks importing (default 15)
+    # Load-step recovery: faster catch-up after a big load change (kettle, oven),
+    # at the cost of slightly more overshoot risk. Per phase. Back off if the grid
+    # overshoots/hunts on steps; the predictor still bounds re-issuing in-flight gain.
+    max_correction_per_step: 120  # default 80 — cap on per-poll correction
+    pace_max_step: 150            # default 100 — cap on per-poll ramp growth on real steps
   # Opt-in status reporting to the HAME/Marstek cloud (uses the http_request: above).
   cloud_reporting:
     host: eu.hamedata.com     # cloud endpoint (default)
