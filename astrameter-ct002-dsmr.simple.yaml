@@ -42,7 +42,12 @@ psram:
   speed: 80MHz
 
 logger:
-  level: INFO
+  # DEBUG enabled to diagnose the CT002 <-> Marstek interaction. Revert to INFO
+  # (remove the logs: block) once you're done debugging.
+  level: DEBUG
+  logs:
+    ct002: DEBUG
+    marstek_registration: DEBUG
 
 # Native API for Home Assistant / the esphome CLI (logs + OTA). reboot_timeout: 0s
 # keeps the device running standalone if Home Assistant is absent. Delete this
