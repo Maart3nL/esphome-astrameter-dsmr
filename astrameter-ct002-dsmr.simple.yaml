@@ -199,3 +199,5 @@ ct002:
   power_sensor_l3: grid_l3
   ct_type: HME-4              # HME-4 = CT002, HME-3 = CT003
   active_control: true        # balancer steers the batteries toward zero grid
+  balancer:
+    min_efficient_power: 900  # >0 enables efficiency rotation (everything else stays default)
