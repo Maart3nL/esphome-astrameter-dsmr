@@ -16,7 +16,7 @@ substitutions:
   friendly_name: "AstraMeter CT002 (DSMR)"
 
   # AstraMeter (ct002) release. Releases: https://github.com/tomquist/astrameter/releases
-  astrameter_version: "2.2.0"
+  astrameter_version: "2.2.1"
 
   # P1 wiring (Waveshare board defaults; change if your wiring differs)
   dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) → ESP RX (10k pull-up to 3V3)
@@ -61,6 +61,10 @@ ota:
   - platform: esphome
     password: !secret ota_password
 
+# Required by ct002 cloud_reporting below (HTTP GETs to the HAME/Marstek cloud).
+http_request:
+  timeout: 10s
+
 # Wired Ethernet (W5500 over SPI) — Waveshare ESP32-S3-POE-ETH pin mapping.
 # Needed so the ct002 emulator can reach the Marstek batteries (UDP) on the LAN.
 ethernet:
@@ -101,8 +105,8 @@ dsmr:
 #  all three phases, and per phase exactly one side is non-zero: importing ->
 #  power_delivered_l? > 0 (returned 0); exporting -> power_returned_l? > 0
 #  (delivered 0). So net = delivered - returned (kW -> W): + = import, - = export.
-#  Each power_returned_l? recomputes its grid_l? once per telegram, independently
-#  (one phase can export while another imports).
+#  All three grid_l? recompute TOGETHER once per telegram, when power_returned_l3
+#  (the last power value) is published, so ct002 sees a consistent 3-phase set.
 # -----------------------------------------------------------------------------
 sensor:
   - platform: dsmr
@@ -118,20 +122,19 @@ sensor:
     power_returned_l1:
       id: power_returned_l1
       internal: true
-      on_value:
-        then:
-          - component.update: grid_l1
     power_returned_l2:
       id: power_returned_l2
       internal: true
-      on_value:
-        then:
-          - component.update: grid_l2
     power_returned_l3:
       id: power_returned_l3
       internal: true
       on_value:
+        # power_returned_l3 (OBIS 62.7.0) is the LAST power value in each telegram, so
+        # all three phases' delivered/returned are fresh here. Recompute all three
+        # grid_l? together -> ct002 gets a consistent 3-phase snapshot every telegram.
         then:
+          - component.update: grid_l1
+          - component.update: grid_l2
           - component.update: grid_l3
 
   - platform: template
@@ -181,3 +184,7 @@ ct002:
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device → fixed dBm)
   balancer:
     min_efficient_power: 900  # >0 enables efficiency rotation (everything else stays default)
+  # Opt-in status reporting to the HAME/Marstek cloud (uses the http_request: above).
+  cloud_reporting:
+    host: eu.hamedata.com     # cloud endpoint (default)
+    interval: 60s             # report cadence (default)
