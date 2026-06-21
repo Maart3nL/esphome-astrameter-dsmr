@@ -219,24 +219,6 @@ sensor:
           - component.update: grid_l3
           - component.update: grid_power_total
 
-    # --- Richer meter data (visible). Units/device_class/state_class come from
-    #     the DSMR defaults; the energy totals are total_increasing kWh, ready
-    #     for Home Assistant's Energy dashboard. --------------------------------
-    voltage_l1:
-      name: "Voltage L1"
-    voltage_l2:
-      name: "Voltage L2"
-    voltage_l3:
-      name: "Voltage L3"
-    energy_delivered_tariff1:
-      name: "Energy Imported (Tariff 1)"
-    energy_delivered_tariff2:
-      name: "Energy Imported (Tariff 2)"
-    energy_returned_tariff1:
-      name: "Energy Exported (Tariff 1)"
-    energy_returned_tariff2:
-      name: "Energy Exported (Tariff 2)"
-
   # --- Net grid power per phase in Watt (+ import / - export) — fed to ct002 ----
   - platform: template
     name: "Grid Power L1"

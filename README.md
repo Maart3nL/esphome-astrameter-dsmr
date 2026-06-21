@@ -214,8 +214,7 @@ After Tailscale first connects, open the device in the Tailscale admin console a
 All non-internal entities appear automatically in the web UI and (via the API) in Home
 Assistant:
 
-- **Meter:** `Grid Power L1/L2/L3` + `Grid Power Total` (W), `Voltage L1/L2/L3`,
-  `Energy Imported/Exported (Tariff 1 & 2)` (kWh — ready for HA's Energy dashboard).
+- **Meter:** `Grid Power L1/L2/L3` + `Grid Power Total` (W).
 - **CT002 runtime:** `CT002 Active Control`, `Batteries Connected`,
   `CT002 Grid Input L1/L2/L3` (post-filter), `CT002 Type`, `CT002 MAC`.
 - **CT002 settings:** every configured tuning value as a read-only `Setting · …` entity
