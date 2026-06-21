@@ -198,11 +198,14 @@ ct002:
   balancer:
     min_efficient_power: 900  # >0 enables efficiency rotation (everything else stays default)
     import_trim_w: 25         # cover the few W the Marstek firmware parks importing (default 15)
-    # Load-step recovery: faster catch-up after a big load change (kettle, oven),
-    # at the cost of slightly more overshoot risk. Per phase. Back off if the grid
-    # overshoots/hunts on steps; the predictor still bounds re-issuing in-flight gain.
-    max_correction_per_step: 120  # default 80 — cap on per-poll correction
-    pace_max_step: 150            # default 100 — cap on per-poll ramp growth on real steps
+    # Aggressive zero-grid tracking. With one battery per phase the inter-battery
+    # knobs (max_correction_per_step, balance_gain, error_boost*, concentrate_deadband)
+    # are inert — pacing is the real per-poll gain limiter, so raise the pace caps to
+    # crush import fast. The grid predictor + osc-damp + the pace soft-landing (the cap
+    # follows the error back down as it shrinks) keep the approach from overshooting 0W
+    # into export. Back the caps off if you see export blips on load drops.
+    pace_base_step: 80        # punchy first-poll step (default 30)
+    pace_max_step: 250        # faster sustained slew toward 0W (default 100)
   # Opt-in status reporting to the HAME/Marstek cloud (uses the http_request: above).
   cloud_reporting:
     host: eu.hamedata.com     # cloud endpoint (default)
