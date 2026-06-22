@@ -44,10 +44,13 @@ psram:
   speed: 80MHz
 
 logger:
-  # INFO compiles out every DEBUG statement (ct002 logs on each UDP poll + telegram),
-  # so there's no per-poll/per-telegram log work in the hot path. Raise back to DEBUG
-  # (and add a logs: block for ct002/marstek_registration) only when diagnosing.
-  level: INFO
+  # TEMP: DEBUG re-enabled to measure the Venus E poll cadence + ramp latency. ct002
+  # logs on each UDP poll/telegram, so this re-adds hot-path log work — revert to
+  # INFO (drop the logs: block) once you've captured the measurement.
+  level: DEBUG
+  logs:
+    ct002: DEBUG
+    marstek_registration: DEBUG
 
 # Native API for Home Assistant / the esphome CLI (logs + OTA). reboot_timeout: 0s
 # keeps the device running standalone if Home Assistant is absent. Delete this
@@ -192,7 +195,7 @@ ct002:
   active_control: true        # balancer steers the batteries toward zero grid
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device → fixed dBm)
   balancer:
-    min_efficient_power: 900  # >0 enables efficiency rotation (everything else stays default)
+    min_efficient_power: 300  # park a battery only at very low demand (was 900; 0 = never park)
     # 2.2.0 rewrote active control with an adaptive grid predictor + ramp pacing +
     # oscillation damping + steady-import trim — all tuned for LAGGY meters (multi-second
     # Home Assistant push sensors) and MULTIPLE batteries per phase. This setup is the
