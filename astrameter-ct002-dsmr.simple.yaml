@@ -32,6 +32,8 @@ esp32:
   flash_size: 16MB
   framework:
     type: esp-idf
+    advanced:
+      compiler_optimization: PERF   # -O2 = build for speed (default is SIZE/-Os); 16MB flash → size cost is fine
     sdkconfig_options:
       # ct002's UDP responder needs more sockets than ESPHome's auto-size (14).
       CONFIG_LWIP_MAX_SOCKETS: "24"
@@ -42,12 +44,10 @@ psram:
   speed: 80MHz
 
 logger:
-  # DEBUG enabled to diagnose the CT002 <-> Marstek interaction. Revert to INFO
-  # (remove the logs: block) once you're done debugging.
-  level: DEBUG
-  logs:
-    ct002: DEBUG
-    marstek_registration: DEBUG
+  # INFO compiles out every DEBUG statement (ct002 logs on each UDP poll + telegram),
+  # so there's no per-poll/per-telegram log work in the hot path. Raise back to DEBUG
+  # (and add a logs: block for ct002/marstek_registration) only when diagnosing.
+  level: INFO
 
 # Native API for Home Assistant / the esphome CLI (logs + OTA). reboot_timeout: 0s
 # keeps the device running standalone if Home Assistant is absent. Delete this
@@ -61,10 +61,6 @@ ota:
   - platform: esphome
     password: !secret ota_password
 
-# Required by ct002 cloud_reporting below (HTTP GETs to the HAME/Marstek cloud).
-http_request:
-  timeout: 10s
-
 # Wired Ethernet (W5500 over SPI) — Waveshare ESP32-S3-POE-ETH pin mapping.
 # Needed so the ct002 emulator can reach the Marstek batteries (UDP) on the LAN.
 ethernet:
@@ -75,7 +71,7 @@ ethernet:
   cs_pin: GPIO14
   interrupt_pin: GPIO10
   reset_pin: GPIO9
-  clock_speed: 25MHz
+  clock_speed: 40MHz   # was 25MHz (below ESPHome's 26.67MHz default). Lower SPI latency on the UDP/API path; valid 8–80MHz — validate Ethernet stability, drop to 33MHz if the board's traces complain
 
 # AstraMeter CT002 emulator component, pulled from GitHub at the pinned tag above.
 external_components:
@@ -208,7 +204,3 @@ ct002:
     pace_base_step: 0         # 0 = no ramp pacing; full correction per poll (default 30)
     osc_damp_max: 0           # 0 = no oscillation damping (default 0.95)
     import_trim_w: 0          # 0 = no steady-import trim; 2.1.2 had none (default 15)
-  # Opt-in status reporting to the HAME/Marstek cloud (uses the http_request: above).
-  cloud_reporting:
-    host: eu.hamedata.com     # cloud endpoint (default)
-    interval: 60s             # report cadence (default)
