@@ -195,15 +195,17 @@ ct002:
   active_control: true        # balancer steers the batteries toward zero grid
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device → fixed dBm)
   balancer:
-    min_efficient_power: 300  # park a battery only at very low demand (was 900; 0 = never park)
-    # 2.2.0 rewrote active control with an adaptive grid predictor + ramp pacing +
-    # oscillation damping + steady-import trim — all tuned for LAGGY meters (multi-second
-    # Home Assistant push sensors) and MULTIPLE batteries per phase. This setup is the
-    # opposite: a fast, clean 1Hz DSMR read directly, with one Venus E per phase. There
-    # that machinery only adds reaction lag and overshoot (slow ramp + ±2kW swings on a
-    # load step). Zeroing these four falls back to the 2.1.2 controller — act on the raw
-    # meter and send the full correction immediately (crisp response, grid tight to 0W).
-    grid_predict_trust: 0     # 0 = act on the raw meter, no predictor lag (default 0.5)
-    pace_base_step: 0         # 0 = no ramp pacing; full correction per poll (default 30)
-    osc_damp_max: 0           # 0 = no oscillation damping (default 0.95)
-    import_trim_w: 0          # 0 = no steady-import trim; 2.1.2 had none (default 15)
+    min_efficient_power: 900  # matches the 2.1.2 addon (park a unit below this per-unit demand)
+    # 2.2.0 rewrote active control. For this setup (fast clean 1Hz DSMR, one Venus E per
+    # phase) the new machinery only adds reaction lag, so we revert to 2.1.2 behaviour:
+    #  • grid_predict_trust / pace_base_step / osc_damp_max / import_trim_w = off → the
+    #    grid-following loop acts on the raw meter, full correction per poll.
+    #  • efficiency_demand_alpha = 1 → the efficiency scheduler's "how many batteries are
+    #    active" decision uses RAW demand like 2.1.2. At the 2.2.x default (0.1) that demand
+    #    is EMA-smoothed, so after a load step a parked battery isn't reactivated for ~15
+    #    polls → the slow staircase ramp + export overshoot. THIS was the real culprit.
+    grid_predict_trust: 0       # 0 = act on the raw meter, no predictor lag (default 0.5)
+    pace_base_step: 0           # 0 = no ramp pacing; full correction per poll (default 30)
+    osc_damp_max: 0             # 0 = no oscillation damping (default 0.95)
+    import_trim_w: 0            # 0 = no steady-import trim; 2.1.2 had none (default 15)
+    efficiency_demand_alpha: 1  # 1 = react to raw demand (2.1.2); 0.1 default lags reactivation ~15 polls
