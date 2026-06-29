@@ -154,6 +154,10 @@ number:
     restore_value: true     # persist across reboots
     initial_value: 0
     entity_category: config
+    on_value:               # apply the new offset immediately (don't wait for the next telegram)
+      then:
+        - component.update: grid_l1
+        - component.update: grid_total
 
   - platform: template
     name: "L2 Power Offset"
@@ -167,6 +171,10 @@ number:
     restore_value: true
     initial_value: 0
     entity_category: config
+    on_value:
+      then:
+        - component.update: grid_l2
+        - component.update: grid_total
 
   - platform: template
     name: "L3 Power Offset"
@@ -180,6 +188,10 @@ number:
     restore_value: true
     initial_value: 0
     entity_category: config
+    on_value:
+      then:
+        - component.update: grid_l3
+        - component.update: grid_total
 
 # -----------------------------------------------------------------------------
 #  Net grid power per phase in Watt, fed to ct002. The P1 telegram always carries
@@ -219,13 +231,17 @@ sensor:
           - component.update: grid_l2
           - component.update: grid_l3
           - component.update: grid_total
-    # Relevant extra telegram values (published as-is; absent on some meters -> stay blank).
+    # Relevant extra telegram values (absent on some meters -> stay blank). Throttled
+    # to 30s — they're display-only (don't feed ct002), so no need to publish at 1Hz.
     voltage_l1:
       name: "Voltage L1"
+      filters: [throttle_average: 30s]
     voltage_l2:
       name: "Voltage L2"
+      filters: [throttle_average: 30s]
     voltage_l3:
       name: "Voltage L3"
+      filters: [throttle_average: 30s]
 
   - platform: template
     name: "Grid Power L1"
@@ -314,6 +330,17 @@ text_sensor:
       name: "IP Address"
       entity_category: diagnostic
 
+# Device online/offline in Home Assistant (follows the API connection).
+binary_sensor:
+  - platform: status
+    name: "Status"
+
+# Reboot from the web UI or Home Assistant.
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: config
+
 # -----------------------------------------------------------------------------
 #  Marstek CT002 emulator — three-phase, fed by grid_l1/l2/l3. Uses the
 #  component's built-in defaults for filters / saturation (kept simple); only the
@@ -329,9 +356,9 @@ ct002:
   active_control: true        # balancer steers the batteries toward zero grid
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device -> fixed dBm)
   dedupe_window: 1s           # drop repeat polls from the same battery within 1s (0s = off)
+  max_sensor_age: 30s         # safety: zero the battery input if no telegram arrives within 30s
   balancer:
     min_efficient_power: 300   # park a unit below this per-unit demand (0 = never park)
-    balance_deadband: 25.0     # 2.2.2 default; inter-battery, inert with one battery per phase
     # 2.2.0 rewrote active control with an adaptive grid predictor + ramp pacing +
     # oscillation damping + steady-import trim — all tuned for LAGGY meters (multi-second
     # Home Assistant push sensors) and MULTIPLE batteries per phase. This setup is the
