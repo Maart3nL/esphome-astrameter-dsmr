@@ -1,0 +1,231 @@
+# =============================================================================
+#  AstraMeter CT002 (DSMR) — SIMPLE V2
+#  -----------------------------------------------------------------------------
+#  Self-contained config: a Dutch DSMR 5 (P1) meter feeds the Marstek CT002
+#  emulator. V2 adds an MQTT client + the ct002 `mqtt_insights:` sub-block (Home
+#  Assistant Device Discovery + Marstek-app responder) on top of the SIMPLE base.
+#  Still NO Tailscale/VPN and NO web server — just the P1 reader, the ct002
+#  emulator (UDP to the batteries on the LAN), the native API + OTA, and MQTT.
+#
+#  Board: Waveshare ESP32-S3-POE-ETH (ESP32-S3R8 + W5500). To install:
+#    cp secrets.yaml.example secrets.yaml   # api_encryption_key, ota_password,
+#                                           # ct_mac, mqtt_broker/username/password
+#    esphome run astrameter-ct002-dsmr.simple.v2.yaml
+# =============================================================================
+
+substitutions:
+  name: astrameter-ct002-dsmr
+  friendly_name: "AstraMeter CT002 (DSMR)"
+
+  # AstraMeter (ct002) release. Releases: https://github.com/tomquist/astrameter/releases
+  astrameter_version: "2.2.2"
+
+  # P1 wiring (Waveshare board defaults; change if your wiring differs)
+  dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) -> ESP RX (10k pull-up to 3V3)
+  dsmr_request_pin: GPIO17      # P1 "Data Request" / RTS (RJ12 pin 2), driven HIGH
+  dsmr_baud_rate: "115200"      # DSMR 5.x = 115200 8N1 (older DSMR 2/3 = 9600)
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      compiler_optimization: PERF   # -O2 = build for speed (default is SIZE/-Os); 16MB flash -> size cost is fine
+    sdkconfig_options:
+      # ct002's UDP responder needs more sockets than ESPHome's auto-size (14).
+      CONFIG_LWIP_MAX_SOCKETS: "24"
+
+# 8 MB octal PSRAM (the "R8" module).
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO   # ct002 logs on each UDP poll/telegram; INFO keeps the hot path quiet
+
+# Native API for Home Assistant / the esphome CLI (logs + OTA). reboot_timeout: 0s
+# keeps the device running standalone if Home Assistant is absent. Delete this
+# block if you don't use HA and only flash over USB.
+api:
+  encryption:
+    key: !secret api_encryption_key
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Wired Ethernet (W5500 over SPI) — Waveshare ESP32-S3-POE-ETH pin mapping.
+# Needed so the ct002 emulator can reach the Marstek batteries (UDP) on the LAN.
+ethernet:
+  type: W5500
+  clk_pin: GPIO13
+  mosi_pin: GPIO11
+  miso_pin: GPIO12
+  cs_pin: GPIO14
+  interrupt_pin: GPIO10
+  reset_pin: GPIO9
+  clock_speed: 40MHz   # was 25MHz (below ESPHome's 26.67MHz default). Lower SPI latency on the UDP/API path; valid 8-80MHz — validate Ethernet stability, drop to 33MHz if the board's traces complain
+
+# AstraMeter CT002 emulator component, pulled from GitHub at the pinned tag above.
+external_components:
+  - source: github://tomquist/astrameter@${astrameter_version}
+    components: [ct002]
+    refresh: never        # tag is immutable
+
+# P1 UART. The P1 data line is open-collector AND logically inverted, so we invert
+# in software and rely on an external 10k pull-up to 3V3. Using a ready-made P1
+# cable with a built-in inverter? Set `inverted: false` here.
+uart:
+  id: uart_dsmr
+  baud_rate: ${dsmr_baud_rate}
+  rx_pin:
+    number: ${dsmr_rx_pin}
+    inverted: true
+  rx_buffer_size: 1700
+
+# MQTT client. Enabled in V2 so the ct002 `mqtt_insights:` sub-block can publish
+# Home Assistant Device Discovery + answer Marstek-app polls on this broker
+# (mqtt_insights carries no credentials of its own — it uses this connection).
+#   • reboot_timeout: 0s mirrors api: above — an unreachable broker won't reboot
+#     the device every 15 min (ESPHome's mqtt default), keeping it standalone-safe.
+#   • discovery: false — the native API already exposes grid_l1/l2/l3 to HA, so we
+#     suppress ESPHome's own MQTT discovery to avoid duplicate entities. (ct002's
+#     mqtt_insights: HA discovery for the batteries is separate and stays on.)
+mqtt:
+  broker: !secret mqtt_broker
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  reboot_timeout: 0s
+  discovery: false
+
+dsmr:
+  id: dsmr_instance
+  uart_id: uart_dsmr
+  request_pin: ${dsmr_request_pin}
+  max_telegram_length: 1700
+
+# -----------------------------------------------------------------------------
+#  Net grid power per phase in Watt, fed to ct002. The P1 telegram always carries
+#  all three phases, and per phase exactly one side is non-zero: importing ->
+#  power_delivered_l? > 0 (returned 0); exporting -> power_returned_l? > 0
+#  (delivered 0). So net = delivered - returned (kW -> W): + = import, - = export.
+#  All three grid_l? recompute TOGETHER once per telegram, when power_returned_l3
+#  (the last power value) is published, so ct002 sees a consistent 3-phase set.
+# -----------------------------------------------------------------------------
+sensor:
+  - platform: dsmr
+    power_delivered_l1:
+      id: power_delivered_l1
+      internal: true
+    power_delivered_l2:
+      id: power_delivered_l2
+      internal: true
+    power_delivered_l3:
+      id: power_delivered_l3
+      internal: true
+    power_returned_l1:
+      id: power_returned_l1
+      internal: true
+    power_returned_l2:
+      id: power_returned_l2
+      internal: true
+    power_returned_l3:
+      id: power_returned_l3
+      internal: true
+      on_value:
+        # power_returned_l3 (OBIS 62.7.0) is the LAST power value in each telegram, so
+        # all three phases' delivered/returned are fresh here. Recompute all three
+        # grid_l? together -> ct002 gets a consistent 3-phase snapshot every telegram.
+        then:
+          - component.update: grid_l1
+          - component.update: grid_l2
+          - component.update: grid_l3
+
+  - platform: template
+    name: "Grid Power L1"
+    id: grid_l1
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float in_w = id(power_delivered_l1).state;
+      float out_w = id(power_returned_l1).state;
+      if (std::isnan(in_w)) in_w = 0.0f;     // phase missing from telegram -> treat as 0
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  - platform: template
+    name: "Grid Power L2"
+    id: grid_l2
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float in_w = id(power_delivered_l2).state;
+      float out_w = id(power_returned_l2).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+  - platform: template
+    name: "Grid Power L3"
+    id: grid_l3
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float in_w = id(power_delivered_l3).state;
+      float out_w = id(power_returned_l3).state;
+      if (std::isnan(in_w)) in_w = 0.0f;
+      if (std::isnan(out_w)) out_w = 0.0f;
+      return (in_w - out_w) * 1000.0f;
+
+# -----------------------------------------------------------------------------
+#  Marstek CT002 emulator — three-phase, fed by grid_l1/l2/l3. Uses the
+#  component's built-in defaults for filters / saturation (kept simple); only the
+#  balancer knobs below are overridden to reproduce 2.1.2 active-control behaviour.
+# -----------------------------------------------------------------------------
+ct002:
+  id: ct002_main
+  power_sensor_l1: grid_l1
+  power_sensor_l2: grid_l2
+  power_sensor_l3: grid_l3
+  ct_type: HME-4              # HME-4 = CT002, HME-3 = CT003
+  ct_mac: !secret ct_mac      # "" = mirror each battery's own CT MAC; or a fixed 12-hex MAC (':'/'-' ok)
+  active_control: true        # balancer steers the batteries toward zero grid
+  wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device -> fixed dBm)
+  balancer:
+    min_efficient_power: 900   # park a unit below this per-unit demand (matches the 2.1.2 addon; 0 = never park)
+    balance_deadband: 25.0     # 2.2.2 default; inter-battery, inert with one battery per phase
+    # 2.2.0 rewrote active control with an adaptive grid predictor + ramp pacing +
+    # oscillation damping + steady-import trim — all tuned for LAGGY meters (multi-second
+    # Home Assistant push sensors) and MULTIPLE batteries per phase. This setup is the
+    # opposite: a fast, clean 1Hz DSMR read directly, with one Venus E per phase. There
+    # that machinery only adds reaction lag and overshoot (slow ramp + ±2kW swings on a
+    # load step). Zeroing these four falls back to the 2.1.2 controller — act on the raw
+    # meter and send the full correction immediately (crisp response, grid tight to 0W).
+    grid_predict_trust: 0      # 0 = act on the raw meter, no predictor lag (default 0.5)
+    pace_base_step: 0          # 0 = no ramp pacing; full correction per poll (default 30)
+    osc_damp_max: 0            # 0 = no oscillation damping (default 0.95)
+    import_trim_w: 0           # 0 = no steady-import trim; 2.1.2 had none (default 15)
+    efficiency_demand_alpha: 1 # 1 = react to raw demand (2.1.2); 0.1 default lags reactivation ~15 polls
+  mqtt_insights:
+    base_topic: astrameter-esp        # per-installation topic namespace
+    device_id: device-esp-1           # HA discovery node id (blank -> default "device-1")
+    ha_discovery: true                # publish HA Device Discovery for the batteries
+    ha_discovery_prefix: homeassistant
+    marstek_mqtt_enabled: true        # answer Marstek-app polls on the broker
+    marstek_mqtt_interval: 300s       # periodic broadcast cadence (0 = poll-only)
