@@ -325,8 +325,9 @@ ct002:
   ct_mac: !secret ct_mac      # "" = mirror each battery's own CT MAC; or a fixed 12-hex MAC (':'/'-' ok)
   active_control: true        # balancer steers the batteries toward zero grid
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device -> fixed dBm)
+  dedupe_window: 1s           # drop repeat polls from the same battery within 1s (0s = off)
   balancer:
-    min_efficient_power: 900   # park a unit below this per-unit demand (matches the 2.1.2 addon; 0 = never park)
+    min_efficient_power: 300   # park a unit below this per-unit demand (0 = never park)
     balance_deadband: 25.0     # 2.2.2 default; inter-battery, inert with one battery per phase
     # 2.2.0 rewrote active control with an adaptive grid predictor + ramp pacing +
     # oscillation damping + steady-import trim — all tuned for LAGGY meters (multi-second
