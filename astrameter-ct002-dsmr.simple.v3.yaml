@@ -43,8 +43,11 @@ esp32:
     advanced:
       compiler_optimization: PERF   # -O2 = build for speed (default is SIZE/-Os); 16MB flash -> size cost is fine
     sdkconfig_options:
-      # ct002's UDP responder needs more sockets than ESPHome's auto-size (14).
-      CONFIG_LWIP_MAX_SOCKETS: "24"
+      # LWIP socket budget. V3 stacks several socket users: ct002 UDP responder (1),
+      # MQTT (1), native API (listener + clients), OTA listener, mDNS, and the
+      # web_server httpd (IDF esp_http_server: listener + ctrl + up to 7 clients,
+      # ~9 at peak). Worst-case concurrent ~20, so 32 leaves comfortable headroom.
+      CONFIG_LWIP_MAX_SOCKETS: "32"
 
 # 8 MB octal PSRAM (the "R8" module).
 psram:
