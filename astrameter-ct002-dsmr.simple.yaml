@@ -16,10 +16,10 @@ substitutions:
   friendly_name: "AstraMeter CT002 (DSMR)"
 
   # AstraMeter (ct002) release. Releases: https://github.com/tomquist/astrameter/releases
-  astrameter_version: "2.2.1"
+  astrameter_version: "2.1.2"
 
   # P1 wiring (Waveshare board defaults; change if your wiring differs)
-  dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) → ESP RX (10k pull-up to 3V3)
+  dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) ? ESP RX (10k pull-up to 3V3)
   dsmr_request_pin: GPIO17      # P1 "Data Request" / RTS (RJ12 pin 2), driven HIGH
   dsmr_baud_rate: "115200"      # DSMR 5.x = 115200 8N1 (older DSMR 2/3 = 9600)
 
@@ -33,7 +33,7 @@ esp32:
   framework:
     type: esp-idf
     advanced:
-      compiler_optimization: PERF   # -O2 = build for speed (default is SIZE/-Os); 16MB flash → size cost is fine
+      compiler_optimization: PERF   # -O2 = build for speed (default is SIZE/-Os); 16MB flash ? size cost is fine
     sdkconfig_options:
       # ct002's UDP responder needs more sockets than ESPHome's auto-size (14).
       CONFIG_LWIP_MAX_SOCKETS: "24"
@@ -47,10 +47,10 @@ logger:
   # TEMP: DEBUG re-enabled to measure the Venus E poll cadence + ramp latency. ct002
   # logs on each UDP poll/telegram, so this re-adds hot-path log work — revert to
   # INFO (drop the logs: block) once you've captured the measurement.
-  level: DEBUG
+  level: INFO
   logs:
-    ct002: DEBUG
-    marstek_registration: DEBUG
+    ct002: INFO
+    marstek_registration: INFO
 
 # Native API for Home Assistant / the esphome CLI (logs + OTA). reboot_timeout: 0s
 # keeps the device running standalone if Home Assistant is absent. Delete this
@@ -92,7 +92,14 @@ uart:
     number: ${dsmr_rx_pin}
     inverted: true
   rx_buffer_size: 1700
-
+# Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
+# Discovery + Marstek-app MQTT responder). The sub-block talks to whatever
+# broker this block connects to — it brings no credentials of its own.
+mqtt:
+  broker: 192.168.2.10
+  port: 1883
+  username: #####secret
+  password: #####secret
 dsmr:
   id: dsmr_instance
   uart_id: uart_dsmr
@@ -147,7 +154,7 @@ sensor:
     lambda: |-
       float in_w = id(power_delivered_l1).state;
       float out_w = id(power_returned_l1).state;
-      if (std::isnan(in_w)) in_w = 0.0f;     // phase missing from telegram → treat as 0
+      if (std::isnan(in_w)) in_w = 0.0f;     // phase missing from telegram ? treat as 0
       if (std::isnan(out_w)) out_w = 0.0f;
       return (in_w - out_w) * 1000.0f;
 
@@ -193,19 +200,26 @@ ct002:
   ct_type: HME-4              # HME-4 = CT002, HME-3 = CT003
   ct_mac: !secret ct_mac      # "" = mirror each battery's own CT MAC; or a fixed 12-hex MAC (':'/'-' ok)
   active_control: true        # balancer steers the batteries toward zero grid
-  wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device → fixed dBm)
+  wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device ? fixed dBm)
   balancer:
-    min_efficient_power: 900  # matches the 2.1.2 addon (park a unit below this per-unit demand)
-    # 2.2.0 rewrote active control. For this setup (fast clean 1Hz DSMR, one Venus E per
-    # phase) the new machinery only adds reaction lag, so we revert to 2.1.2 behaviour:
-    #  • grid_predict_trust / pace_base_step / osc_damp_max / import_trim_w = off → the
-    #    grid-following loop acts on the raw meter, full correction per poll.
-    #  • efficiency_demand_alpha = 1 → the efficiency scheduler's "how many batteries are
-    #    active" decision uses RAW demand like 2.1.2. At the 2.2.x default (0.1) that demand
-    #    is EMA-smoothed, so after a load step a parked battery isn't reactivated for ~15
-    #    polls → the slow staircase ramp + export overshoot. THIS was the real culprit.
-    grid_predict_trust: 0       # 0 = act on the raw meter, no predictor lag (default 0.5)
-    pace_base_step: 0           # 0 = no ramp pacing; full correction per poll (default 30)
-    osc_damp_max: 0             # 0 = no oscillation damping (default 0.95)
-    import_trim_w: 0            # 0 = no steady-import trim; 2.1.2 had none (default 15)
-    efficiency_demand_alpha: 1  # 1 = react to raw demand (2.1.2); 0.1 default lags reactivation ~15 polls
+    min_efficient_power: 900  # park a battery only at very low demand (was 900; 0 = never park)
+    # 2.2.0 rewrote active control with an adaptive grid predictor + ramp pacing +
+    # oscillation damping + steady-import trim — all tuned for LAGGY meters (multi-second
+    # Home Assistant push sensors) and MULTIPLE batteries per phase. This setup is the
+    # opposite: a fast, clean 1Hz DSMR read directly, with one Venus E per phase. There
+    # that machinery only adds reaction lag and overshoot (slow ramp + ±2kW swings on a
+    # load step). Zeroing these four falls back to the 2.1.2 controller — act on the raw
+    # meter and send the full correction immediately (crisp response, grid tight to 0W).
+#    grid_predict_trust: 0     # 0 = act on the raw meter, no predictor lag (default 0.5)
+#    pace_base_step: 0         # 0 = no ramp pacing; full correction per poll (default 30)
+#    osc_damp_max: 0           # 0 = no oscillation damping (default 0.95)
+#    import_trim_w: 0          # 0 = no steady-import trim; 2.1.2 had none (default import_trim_w: 0            # 0 = no steady-import trim; 2.1.2 had none (default 15)
+#    efficiency_demand_alpha: 1  # 1 = react to raw demand (2.1.2); 0.1 default lags reactivation ~15 polls
+  mqtt_insights:
+     base_topic: astrameter-esp         # per-installation namespace
+     device_id: device-esp-1            # HA discovery node id; defaults to
+  #                                  # "device-1" to match the Python add-on
+     ha_discovery: true             # publish HA Device Discovery
+     ha_discovery_prefix: homeassistant
+     marstek_mqtt_enabled: true     # answer Marstek-app polls on the broker
+     marstek_mqtt_interval: 300s    # periodic broadcast cadence (0 = poll-only)
