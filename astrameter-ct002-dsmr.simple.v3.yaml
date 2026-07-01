@@ -355,7 +355,7 @@ ct002:
   ct_mac: !secret ct_mac      # "" = mirror each battery's own CT MAC; or a fixed 12-hex MAC (':'/'-' ok)
   active_control: true        # balancer steers the batteries toward zero grid
   wifi_rssi: -50              # WiFi RSSI reported to the batteries (Ethernet device -> fixed dBm)
-  dedupe_window: 1s           # drop repeat polls from the same battery within 1s (0s = off)
+  dedupe_window: 0s           # 0s = off; >0 drops repeat polls from the same battery within the window
   max_sensor_age: 30s         # safety: zero the battery input if no telegram arrives within 30s
   balancer:
     min_efficient_power: 300   # park a unit below this per-unit demand (0 = never park)
