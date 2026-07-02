@@ -125,16 +125,21 @@ external_components:
 #  esp-idf + ≥4 MB flash. The package also brings its own entities: VPN
 #  Connected / VPN IP / VPN Peers switches+sensors, a Reboot button, and SNTP
 #  time (see the note above).
-#  Caveats: experimental; ~2–5 Mbit/s tunnel. `ref:` is PINNED to a verified
-#  commit for reproducible builds. To upgrade:
-#    git ls-remote https://github.com/Csontikka/esphome-tailscale main
+#  Caveats: experimental; ~2–5 Mbit/s tunnel. `ref:` below pins the package's
+#  GLUE yaml to a tagged release. NOTE: that glue itself pulls the actual
+#  tailscale C++ component from @main (refresh: 0s, hardcoded in the package),
+#  so the COMPILED component always tracks upstream main regardless of this pin
+#  — the ref only fixes the entity/time/switch definitions we consume (e.g.
+#  v0.4.2 vs main here differ only by main adding MDI icons to the entities).
+#  To move the glue pin, check the newest release:
+#    https://github.com/Csontikka/esphome-tailscale/releases
 #  then bump `ref:`, run `esphome clean` + compile, flash, and confirm
 #  "VPN Connected" + key-expiry still disabled in the admin console.
 # -----------------------------------------------------------------------------
 packages:
   tailscale:
     url: https://github.com/Csontikka/esphome-tailscale
-    ref: f70c903d88e6b156770cbcb363f3ea5890a033c2   # verified commit; bump deliberately (see above)
+    ref: v0.4.2   # latest tagged release (2026-06-03). Glue only — C++ comp tracks @main (see note)
     files: [packages/tailscale/tailscale.yaml]
     refresh: 1d
 
