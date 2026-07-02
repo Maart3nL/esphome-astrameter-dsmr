@@ -37,7 +37,7 @@ for remote access — pick one:
 |---|---|---|
 | DSMR P1 reader → ct002 emulator | ✅ | ✅ |
 | Web UI (v3) + OTA firmware upload | ✅ | ✅ |
-| Per-phase power offsets (live) | ✅ | ✅ |
+| Power offset (live, split over the phases) | ✅ | ✅ |
 | MQTT + ct002 `mqtt_insights` | ✅ | ✅ |
 | Home Assistant native API | ✅ (optional) | ✅ (optional) |
 | **Tailscale node** (remote web UI / OTA, tailnet MQTT broker) | — | ✅ |
@@ -60,14 +60,14 @@ flowchart LR
     DSMR --> L1["grid_l1"]
     DSMR --> L2["grid_l2"]
     DSMR --> L3["grid_l3"]
-    OFF["offset_l1/l2/l3<br/>(live numbers)"] --> L1 & L2 & L3
+    OFF["Power Offset<br/>(live number, ÷3)"] --> L1 & L2 & L3
     L1 --> CT["ct002 emulator"]
     L2 --> CT
     L3 --> CT
     CT -->|"UDP :12345"| BAT["Marstek battery"]
 ```
 
-Each phase is computed as `(power_delivered − power_returned) × 1000 + offset`, in
+Each phase is computed as `(power_delivered − power_returned) × 1000 + offset ÷ 3`, in
 **watts**:
 
 - **positive** = consumption / grid **import**
@@ -78,9 +78,13 @@ the total) recompute **together once per telegram** — triggered by the last po
 the telegram — so ct002 always sees a consistent 3-phase snapshot, ~1× per second on SMR5.
 The emulator reads the latest values on each Marstek battery UDP poll.
 
-The per-phase **offset** (−100…+100 W, adjustable live from HA or the web UI, persisted
-across reboots) is added before ct002 sees the value, shifting the zero-grid target: e.g.
-+50 W on L1 makes ct002 settle the real L1 grid near −50 W.
+The single **Power Offset** (−300…+300 W, adjustable live from HA or the web UI,
+persisted across reboots) is split equally over the three phases in **whole watts**
+(offset ÷ 3, truncated toward zero — e.g. 10 W becomes 3 W per phase) and added before
+ct002 sees the values, shifting the zero-grid target: a **positive** offset makes the
+batteries discharge more, settling the real grid into **export** to the net; a
+**negative** offset settles it into **import** from the net. E.g. +30 W makes each real
+phase settle near −10 W (≈30 W total export).
 
 The device runs **fully standalone**: Home Assistant is optional, and
 `reboot_timeout: 0s` on both `api:` and `mqtt:` keeps it alive even if HA or the broker
@@ -162,7 +166,7 @@ flowchart TB
 
 | File | Purpose |
 |------|---------|
-| [`astrameter-ct002-dsmr.simple.v3.yaml`](astrameter-ct002-dsmr.simple.v3.yaml) | **Simple V3** — self-contained: board, Ethernet, P1/DSMR reader, meter sensors, per-phase offsets, CT002 emulator, web UI + OTA, MQTT + mqtt_insights |
+| [`astrameter-ct002-dsmr.simple.v3.yaml`](astrameter-ct002-dsmr.simple.v3.yaml) | **Simple V3** — self-contained: board, Ethernet, P1/DSMR reader, meter sensors, power offset, CT002 emulator, web UI + OTA, MQTT + mqtt_insights |
 | [`astrameter-ct002-dsmr.simple.tailscale.yaml`](astrameter-ct002-dsmr.simple.tailscale.yaml) | **Simple V3 + Tailscale** — the same, plus the device joins your tailnet (remote web UI/OTA, tailnet MQTT) |
 | [`secrets.yaml.example`](secrets.yaml.example) | Template for `secrets.yaml` (which is gitignored) |
 | [`docs/wiring.svg`](docs/wiring.svg) | P1 wiring diagram |
@@ -210,9 +214,10 @@ days.
   (predictor, ramp pacing, oscillation damping) is tuned for laggy multi-second meters and
   multiple batteries per phase — with a fast 1 Hz DSMR feed and one battery per phase it
   only adds reaction lag and overshoot. These are **compile-time**: edit and re-flash.
-- **Per-phase offsets** — the only *runtime* tuning: `L1/L2/L3 Power Offset` numbers
-  (−100…+100 W), adjustable live from HA or the web UI, persisted across reboots, applied
-  instantly.
+- **Power offset** — the only *runtime* tuning: a single `Power Offset` number
+  (−300…+300 W), adjustable live from HA or the web UI, persisted across reboots, applied
+  instantly. Split equally over L1/L2/L3 in whole watts; **positive = more export to the
+  net, negative = more import from the net.**
 - **Secrets** — anything environment-specific (broker, credentials, keys) lives in
   `secrets.yaml` and is referenced via `!secret`, so nothing identifying is in this public
   repo.
@@ -229,7 +234,7 @@ Assistant:
 
 - **Meter:** `Grid Power L1/L2/L3` + `Grid Power Total` (W, per-telegram), `Voltage
   L1/L2/L3` (30 s averaged; blank if your meter doesn't report them).
-- **Controls:** `L1/L2/L3 Power Offset` numbers and a `Restart` button.
+- **Controls:** a `Power Offset` number and a `Restart` button.
 - **Diagnostics:** `Uptime`, `ESP Temperature`, `ESPHome Version`, `IP Address`, `Status`
   (online/offline).
 - **Tailscale variant only:** `VPN Connected`, `VPN IP`, `VPN Peers`, `Device Memory`,

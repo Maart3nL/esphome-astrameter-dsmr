@@ -6,7 +6,7 @@
 #  OTA firmware upload in it) is reachable from anywhere — no port-forwarding —
 #  and MQTT can reach a broker on the tailnet (e.g. HA's Mosquitto at its
 #  Tailscale IP). Everything else is Simple V3 unchanged: P1/DSMR → ct002 (UDP
-#  to the batteries), web interface, per-phase offsets, MQTT + mqtt_insights.
+#  to the batteries), web interface, power offset, MQTT + mqtt_insights.
 #
 #  FULLY STANDALONE from Home Assistant: api/mqtt reboot_timeout are 0s (no HA
 #  → no reboots), the web UI is embedded in firmware (local: true), and remote
@@ -183,18 +183,23 @@ dsmr:
   max_telegram_length: 1700
 
 # -----------------------------------------------------------------------------
-#  Per-phase power OFFSET (−100…+100 W). Live-adjustable from Home Assistant or
-#  the web UI, persisted across reboots. The value is ADDED to the measured net
-#  power before ct002 sees it, so it shifts the zero-grid target per phase
-#  (e.g. +50 W on L1 makes ct002 settle the real L1 grid near −50 W).
+#  Power OFFSET (−300…+300 W). ONE number, live-adjustable from Home Assistant
+#  or the web UI, persisted across reboots. The value is split EQUALLY over
+#  L1/L2/L3 in whole watts (offset / 3, truncated toward zero — e.g. 10 W ->
+#  3 W per phase, −10 W -> −3 W per phase) and ADDED to each phase's measured
+#  net power before ct002 sees it, shifting the zero-grid target.
+#  Sign: POSITIVE = more EXPORT to the net (ct002 sees extra import, so the
+#  batteries discharge harder and the real grid settles below 0 W);
+#  NEGATIVE = more IMPORT from the net.
+#  (e.g. +30 W makes ct002 settle each real phase near −10 W.)
 # -----------------------------------------------------------------------------
 number:
   - platform: template
-    name: "L1 Power Offset"
-    id: offset_l1
+    name: "Power Offset"
+    id: offset_total
     unit_of_measurement: W
-    min_value: -100
-    max_value: 100
+    min_value: -300
+    max_value: 300
     step: 1
     mode: box
     optimistic: true        # no backing set_action; writing updates state directly
@@ -204,39 +209,7 @@ number:
     on_value:               # apply the new offset immediately (don't wait for the next telegram)
       then:
         - component.update: grid_l1
-        - component.update: grid_total
-
-  - platform: template
-    name: "L2 Power Offset"
-    id: offset_l2
-    unit_of_measurement: W
-    min_value: -100
-    max_value: 100
-    step: 1
-    mode: box
-    optimistic: true
-    restore_value: true
-    initial_value: 0
-    entity_category: config
-    on_value:
-      then:
         - component.update: grid_l2
-        - component.update: grid_total
-
-  - platform: template
-    name: "L3 Power Offset"
-    id: offset_l3
-    unit_of_measurement: W
-    min_value: -100
-    max_value: 100
-    step: 1
-    mode: box
-    optimistic: true
-    restore_value: true
-    initial_value: 0
-    entity_category: config
-    on_value:
-      then:
         - component.update: grid_l3
         - component.update: grid_total
 
@@ -245,7 +218,8 @@ number:
 #  all three phases, and per phase exactly one side is non-zero: importing ->
 #  power_delivered_l? > 0 (returned 0); exporting -> power_returned_l? > 0
 #  (delivered 0). So net = delivered - returned (kW -> W): + = import, - = export.
-#  We then add the per-phase offset_l? number. All three grid_l? (plus the total)
+#  We then add the phase's whole-watt share of the single Power Offset number
+#  (offset / 3, truncated). All three grid_l? (plus the total)
 #  recompute TOGETHER once per telegram, when power_returned_l3 (the last power
 #  value) is published, so ct002 sees a consistent 3-phase set.
 # -----------------------------------------------------------------------------
@@ -301,10 +275,11 @@ sensor:
     lambda: |-
       float in_w = id(power_delivered_l1).state;
       float out_w = id(power_returned_l1).state;
-      float off = id(offset_l1).state;
+      float off = id(offset_total).state;
       if (std::isnan(in_w)) in_w = 0.0f;     // phase missing from telegram -> treat as 0
       if (std::isnan(out_w)) out_w = 0.0f;
       if (std::isnan(off)) off = 0.0f;
+      off = std::trunc(off / 3.0f);          // whole-watt share of the one offset (10 -> 3)
       return (in_w - out_w) * 1000.0f + off;
 
   - platform: template
@@ -318,10 +293,11 @@ sensor:
     lambda: |-
       float in_w = id(power_delivered_l2).state;
       float out_w = id(power_returned_l2).state;
-      float off = id(offset_l2).state;
+      float off = id(offset_total).state;
       if (std::isnan(in_w)) in_w = 0.0f;
       if (std::isnan(out_w)) out_w = 0.0f;
       if (std::isnan(off)) off = 0.0f;
+      off = std::trunc(off / 3.0f);
       return (in_w - out_w) * 1000.0f + off;
 
   - platform: template
@@ -335,10 +311,11 @@ sensor:
     lambda: |-
       float in_w = id(power_delivered_l3).state;
       float out_w = id(power_returned_l3).state;
-      float off = id(offset_l3).state;
+      float off = id(offset_total).state;
       if (std::isnan(in_w)) in_w = 0.0f;
       if (std::isnan(out_w)) out_w = 0.0f;
       if (std::isnan(off)) off = 0.0f;
+      off = std::trunc(off / 3.0f);
       return (in_w - out_w) * 1000.0f + off;
 
   - platform: template
