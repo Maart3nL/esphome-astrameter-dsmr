@@ -53,6 +53,11 @@ esp32:
       # case) PLUS Tailscale's control-plane/DERP/DNS sockets (a handful more).
       # 32 still leaves comfortable headroom.
       CONFIG_LWIP_MAX_SOCKETS: "32"
+      # Default TCP MSS (1440) exceeds what fits in the Tailscale tunnel
+      # (~1280-byte MTU), so full-size web_server segments get dropped and the
+      # web UI stalls over VPN. 1400 keeps segments small enough to survive
+      # the tunnel's encapsulation overhead.
+      CONFIG_LWIP_TCP_MSS: "1400"
 
 # 8 MB octal PSRAM (the "R8" module). MANDATORY here — the Tailscale component's
 # control-plane buffers live in PSRAM.
