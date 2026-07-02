@@ -9,12 +9,12 @@ per-phase grid power into the **[AstraMeter](https://github.com/tomquist/astrame
 `ct002` component**, emulating a **Marstek CT002** grid sensor. Marstek storage
 batteries then steer toward zero grid (self-consumption / zero-export) — no Marstek
 cloud, no CT clamp, no extra dongle. Runs on a **Waveshare ESP32-S3-POE-ETH** over wired
-PoE Ethernet, and is reachable anywhere via **Tailscale**.
+PoE Ethernet.
 
 ## Contents
 
+- [The two variants](#the-two-variants)
 - [How it works](#how-it-works)
-- [Architecture](#architecture)
 - [Hardware](#hardware)
 - [Wiring](#wiring)
 - [GPIO usage](#gpio-usage)
@@ -28,6 +28,29 @@ PoE Ethernet, and is reachable anywhere via **Tailscale**.
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
 
+## The two variants
+
+Both are **fully self-contained** single files (no shared includes) and identical except
+for remote access — pick one:
+
+| | [`…simple.v3.yaml`](astrameter-ct002-dsmr.simple.v3.yaml) | [`…simple.tailscale.yaml`](astrameter-ct002-dsmr.simple.tailscale.yaml) |
+|---|---|---|
+| DSMR P1 reader → ct002 emulator | ✅ | ✅ |
+| Web UI (v3) + OTA firmware upload | ✅ | ✅ |
+| Per-phase power offsets (live) | ✅ | ✅ |
+| MQTT + ct002 `mqtt_insights` | ✅ | ✅ |
+| Home Assistant native API | ✅ (optional) | ✅ (optional) |
+| **Tailscale node** (remote web UI / OTA, tailnet MQTT broker) | — | ✅ |
+| Reachability | LAN only | LAN + anywhere on the tailnet |
+
+Choose **Simple V3** if the device, the batteries, and your MQTT broker all live on the
+same LAN. Choose **Simple V3 + Tailscale** if you want the web UI and OTA reachable from
+anywhere without port-forwarding, or your broker is only reachable over the tailnet.
+
+> The two files are deliberately kept in **lockstep**: any change that isn't
+> Tailscale-specific is mirrored to both. If you edit one, apply the same change to the
+> other.
+
 ## How it works
 
 ```mermaid
@@ -37,62 +60,31 @@ flowchart LR
     DSMR --> L1["grid_l1"]
     DSMR --> L2["grid_l2"]
     DSMR --> L3["grid_l3"]
+    OFF["offset_l1/l2/l3<br/>(live numbers)"] --> L1 & L2 & L3
     L1 --> CT["ct002 emulator"]
     L2 --> CT
     L3 --> CT
     CT -->|"UDP :12345"| BAT["Marstek battery"]
 ```
 
-Each phase is computed as `(power_delivered − power_returned) × 1000`, in **watts**:
+Each phase is computed as `(power_delivered − power_returned) × 1000 + offset`, in
+**watts**:
 
 - **positive** = consumption / grid **import**
 - **negative** = production / grid **export**
 
-This is exactly the sign convention the `ct002` component expects. Values refresh on every
-telegram (~1× per second on SMR5); the emulator reads the latest value on each Marstek
-battery UDP poll.
+This is exactly the sign convention the `ct002` component expects. All three phases (plus
+the total) recompute **together once per telegram** — triggered by the last power value in
+the telegram — so ct002 always sees a consistent 3-phase snapshot, ~1× per second on SMR5.
+The emulator reads the latest values on each Marstek battery UDP poll.
 
-## Architecture
+The per-phase **offset** (−100…+100 W, adjustable live from HA or the web UI, persisted
+across reboots) is added before ct002 sees the value, shifting the zero-grid target: e.g.
++50 W on L1 makes ct002 settle the real L1 grid near −50 W.
 
-```mermaid
-flowchart TB
-    subgraph esp["ESP32-S3 — this config"]
-        PKG["DSMR P1 reader<br/>board · W5500 · UART · sensors"]
-        CT["ct002 emulator<br/>filters · balancer · saturation"]
-        WEB["web_server + OTA upload"]
-        TS["Tailscale node"]
-        MQ["MQTT client"]
-        PKG --> CT
-        CT -. mqtt_insights .-> MQ
-    end
-    HA["Home Assistant<br/>(optional)"]
-    BR["MQTT broker<br/>(HA Mosquitto)"]
-    PH["Phone / laptop"]
-    esp -->|"native API (encrypted)"| HA
-    MQ -->|"over Tailscale"| BR
-    TS -. "remote web UI" .-> PH
-```
-
-Everything is in **one self-contained file** (`astrameter-ct002-dsmr.yaml`) — copy
-`secrets.yaml` and flash, no extra includes to manage. The device runs **fully standalone**:
-Home Assistant is optional, and `reboot_timeout: 0s` on both `api:` and `mqtt:` keeps it
-alive even if HA or the broker is unreachable.
-
-### Two ways to flash: single-file (V1) or split (V2)
-
-Both build **identical firmware** — pick whichever layout you prefer:
-
-- **V1 — [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml):** everything in one
-  self-contained file. Edit anything locally, no GitHub round-trip.
-- **V2 — [`astrameter-ct002-dsmr.v2.yaml`](astrameter-ct002-dsmr.v2.yaml):** a thin
-  per-device entrypoint that holds only the settable **substitutions** and pulls the bulk
-  from this repo as an ESPHome **package**
-  ([`packages/astrameter-ct002-dsmr.base.yaml`](packages/astrameter-ct002-dsmr.base.yaml))
-  at a pinned `ref:`. Secrets still resolve from your **local** `secrets.yaml`; the hosted
-  base contains none.
-
-Choose V2 if you run several devices off a shared base, or want bulk changes to land via
-git; choose V1 for a single self-contained file.
+The device runs **fully standalone**: Home Assistant is optional, and
+`reboot_timeout: 0s` on both `api:` and `mqtt:` keeps it alive even if HA or the broker
+is unreachable.
 
 ## Hardware
 
@@ -102,7 +94,7 @@ git; choose V1 for a single self-contained file.
 | Module | ESP32-S3-WROOM-1(U)-**N16R8** |
 | MCU | ESP32-S3, Xtensa LX7 dual-core @ 240 MHz |
 | Flash | 16 MB |
-| PSRAM | 8 MB **octal** (mandatory for the Tailscale component) |
+| PSRAM | 8 MB **octal** (mandatory for the Tailscale variant) |
 | Ethernet | **W5500** over SPI, 10/100 Mbps, **PoE** |
 | Power | PoE (802.3af) or USB-C |
 
@@ -128,7 +120,7 @@ it back in software. If you use a **ready-made P1 cable with a built-in inverter
 `inverted: false` in the `uart:` block and omit the external resistor.
 
 The P1 pins (`dsmr_rx_pin`, `dsmr_request_pin`, `dsmr_baud_rate`) are substitutions at the
-top of the config — change them if your wiring differs.
+top of both configs — change them if your wiring differs.
 
 ## GPIO usage
 
@@ -149,27 +141,29 @@ top of the config — change them if your wiring differs.
 
 ```mermaid
 flowchart TB
-    MET["DSMR meter"] -->|"P1 wire"| ESP["ESP32-S3<br/>Ethernet + Tailscale node"]
+    MET["DSMR meter"] -->|"P1 wire"| ESP["ESP32-S3<br/>Ethernet (+ Tailscale node)"]
     BAT["Marstek battery"] <-->|"UDP 12345 · same LAN"| ESP
-    ESP -->|"MQTT over Tailscale"| BR["HA Mosquitto<br/>(Tailscale IP)"]
-    ESP -->|"native API"| HA["Home Assistant"]
-    PH["Phone / laptop<br/>on the tailnet"] -->|"web UI over Tailscale"| ESP
+    ESP -->|"MQTT"| BR["MQTT broker<br/>(e.g. HA Mosquitto)"]
+    ESP -->|"native API"| HA["Home Assistant<br/>(optional)"]
+    PH["Phone / laptop"] -->|"web UI"| ESP
 ```
 
-The device joins your **tailnet as a real node** (via
-[esphome-tailscale](https://github.com/Csontikka/esphome-tailscale)), so the web UI is
-reachable from anywhere with no port-forwarding, at the node's `100.x.y.z` address or its
-MagicDNS name. The MQTT connection to Home Assistant's broker also rides the tunnel — see
-[Upgrading the Tailscale component](#upgrading-the-tailscale-component) for the caveats.
+- **Simple V3:** everything on the LAN. The web UI is at `http://<device-ip>/`; the MQTT
+  broker must be reachable from the LAN.
+- **Simple V3 + Tailscale:** the device joins your **tailnet as a real node** (via
+  [esphome-tailscale](https://github.com/Csontikka/esphome-tailscale)), so the web UI —
+  including the OTA firmware upload — is reachable from anywhere with no port-forwarding,
+  at the node's `100.x.y.z` address or its MagicDNS name (`http://astrameter-ct002-dsmr/`).
+  Outbound connections ride the tunnel too, so `mqtt_broker` can be your HA host's
+  Tailscale IP or MagicDNS name. See
+  [Upgrading the Tailscale package](#upgrading-the-tailscale-package) for the caveats.
 
 ## Repository layout
 
 | File | Purpose |
 |------|---------|
-| [`astrameter-ct002-dsmr.yaml`](astrameter-ct002-dsmr.yaml) | **V1 (single-file)** — the entire device, self-contained: board, Ethernet, P1/DSMR reader, meter sensors, CT002 emulator, web UI, Tailscale, MQTT |
-| [`astrameter-ct002-dsmr.v2.yaml`](astrameter-ct002-dsmr.v2.yaml) | **V2 entrypoint** — thin per-device file: just the settable substitutions + a `packages:` link to the base below |
-| [`packages/astrameter-ct002-dsmr.base.yaml`](packages/astrameter-ct002-dsmr.base.yaml) | **V2 base package** — the bulk (everything in V1 except substitutions), consumed remotely; holds no secrets |
-| [`astrameter-ct002-dsmr.simple.yaml`](astrameter-ct002-dsmr.simple.yaml) | **Simple** — minimal standalone build: DSMR → CT002 over Ethernet, with API + OTA. No Tailscale/VPN, web server or MQTT; ct002 on built-in defaults |
+| [`astrameter-ct002-dsmr.simple.v3.yaml`](astrameter-ct002-dsmr.simple.v3.yaml) | **Simple V3** — self-contained: board, Ethernet, P1/DSMR reader, meter sensors, per-phase offsets, CT002 emulator, web UI + OTA, MQTT + mqtt_insights |
+| [`astrameter-ct002-dsmr.simple.tailscale.yaml`](astrameter-ct002-dsmr.simple.tailscale.yaml) | **Simple V3 + Tailscale** — the same, plus the device joins your tailnet (remote web UI/OTA, tailnet MQTT) |
 | [`secrets.yaml.example`](secrets.yaml.example) | Template for `secrets.yaml` (which is gitignored) |
 | [`docs/wiring.svg`](docs/wiring.svg) | P1 wiring diagram |
 
@@ -179,73 +173,94 @@ MagicDNS name. The MQTT connection to Home Assistant's broker also rides the tun
 git clone https://github.com/Maart3nL/esphome-astrameter-dsmr.git
 cd esphome-astrameter-dsmr
 cp secrets.yaml.example secrets.yaml      # then fill in the values
-esphome run astrameter-ct002-dsmr.yaml    # first flash over USB; later flashes via OTA/web UI
-# …or the split layout (bulk fetched from GitHub — see "Two ways to flash"):
-# esphome run astrameter-ct002-dsmr.v2.yaml
+
+# pick ONE variant — first flash over USB; later flashes via OTA / the web UI:
+esphome run astrameter-ct002-dsmr.simple.v3.yaml
+# …or:
+esphome run astrameter-ct002-dsmr.simple.tailscale.yaml
 ```
 
 Fill in `secrets.yaml`:
 
-| Secret | How to get it |
-|--------|---------------|
-| `web_username` / `web_password` | choose — gates the web UI **and** OTA upload (reachable over Tailscale, so make it strong) |
-| `api_encryption_key` | `openssl rand -base64 32` |
-| `ota_password` | `openssl rand -hex 16` |
-| `mqtt_broker` | your HA host's Tailscale IP (most reliable) or MagicDNS name |
-| `mqtt_username` / `mqtt_password` | your broker credentials |
-| `tailscale_auth_key` | Tailscale admin → Settings → Keys → *Generate auth key* (reusable + ephemeral) |
+| Secret | Needed by | How to get it |
+|--------|-----------|---------------|
+| `web_username` / `web_password` | both | choose — gates the web UI **and** OTA upload (remotely reachable in the Tailscale variant, so make it strong) |
+| `api_encryption_key` | both | `openssl rand -base64 32` |
+| `ota_password` | both | `openssl rand -hex 16` |
+| `ct_mac` | both | `""` = mirror each battery's own CT MAC (default), or a fixed 12-hex MAC |
+| `mqtt_broker` | both | broker host/IP — LAN address (V3) or your HA host's Tailscale IP / MagicDNS name (Tailscale variant) |
+| `mqtt_username` / `mqtt_password` | both | your broker credentials |
+| `tailscale_auth_key` | Tailscale only | Tailscale admin → Settings → Keys → *Generate auth key* (reusable + ephemeral) |
 
-After Tailscale first connects, open the device in the Tailscale admin console and
-**Disable key expiry**, or the node drops off the tailnet after ~180 days.
+**Tailscale variant only:** after the device first connects, open it in the Tailscale
+admin console and **Disable key expiry**, or the node drops off the tailnet after ~180
+days.
 
 ## Configuration
 
-- **ct002 tuning** — every filter / balancer / saturation knob is a substitution at the top
-  of `astrameter-ct002-dsmr.yaml`, set to values that reproduce the component defaults.
-  These are **compile-time**: edit one and re-flash. They can't be live-adjusted from HA
-  because the component bakes them in at build time.
-- **Secrets** — anything environment-specific (broker, credentials, keys, optional static
-  IP) lives in `secrets.yaml` and is referenced via `!secret`, so nothing identifying is in
-  this public repo.
+- **AstraMeter version** — a single substitution at the top of each file
+  (`astrameter_version: "2.2.3"`), used to pin the `ct002` external component to a release
+  tag. See [Upgrading AstraMeter](#upgrading-astrameter-the-ct002-component).
+- **ct002 tuning** — the emulator runs on the component's **built-in defaults** for
+  filters/saturation; only a handful of knobs are set directly in the `ct002:` block.
+  Notably, four `balancer:` values (`grid_predict_trust`, `pace_base_step`,
+  `osc_damp_max`, `import_trim_w`) are **zeroed and `efficiency_demand_alpha` set to 1**,
+  which switches AstraMeter 2.2.x's adaptive controller back to the crisp 2.1.2 behavior:
+  act on the raw meter and send the full correction immediately. The 2.2.x machinery
+  (predictor, ramp pacing, oscillation damping) is tuned for laggy multi-second meters and
+  multiple batteries per phase — with a fast 1 Hz DSMR feed and one battery per phase it
+  only adds reaction lag and overshoot. These are **compile-time**: edit and re-flash.
+- **Per-phase offsets** — the only *runtime* tuning: `L1/L2/L3 Power Offset` numbers
+  (−100…+100 W), adjustable live from HA or the web UI, persisted across reboots, applied
+  instantly.
+- **Secrets** — anything environment-specific (broker, credentials, keys) lives in
+  `secrets.yaml` and is referenced via `!secret`, so nothing identifying is in this public
+  repo.
 - **Standalone** — keep or delete the `api:` block depending on whether you use Home
-  Assistant. Either way the emulator and web UI work without it.
+  Assistant. Either way the emulator and web UI work without it. `discovery: false` on
+  `mqtt:` suppresses ESPHome's own MQTT discovery (the native API already exposes the
+  entities to HA); ct002's `mqtt_insights` discovery for the batteries is separate and
+  stays on.
 
 ## Entities
 
 All non-internal entities appear automatically in the web UI and (via the API) in Home
 Assistant:
 
-- **Meter:** `Grid Power L1/L2/L3` + `Grid Power Total` (W).
-- **CT002 runtime:** `CT002 Active Control`, `Batteries Connected`,
-  `CT002 Grid Input L1/L2/L3` (post-filter), `CT002 Type`, `CT002 MAC`.
-- **CT002 settings:** every configured tuning value as a read-only `Setting · …` entity
-  (marked diagnostic so HA tucks them away).
-- **Controls:** `CT002 Debug Log` switch — turns ct002/AstraMeter `DEBUG` logging on/off
-  at runtime (off by default; the global logger ceiling is `DEBUG` so the switch can
-  raise it, but every tag stays at `INFO` until you flip it). `VPN Disable (stop
-  auto-connect)` button — turns the Tailscale "VPN Enabled" switch off (persisted), so
-  the VPN stays down across reboots until you switch it back on.
-- **Tailscale:** `VPN Connected`, `VPN IP`, `VPN Peers`, `Device Memory`, a `Reboot`
-  button, and more (provided by the Tailscale package).
+- **Meter:** `Grid Power L1/L2/L3` + `Grid Power Total` (W, per-telegram), `Voltage
+  L1/L2/L3` (30 s averaged; blank if your meter doesn't report them).
+- **Controls:** `L1/L2/L3 Power Offset` numbers and a `Restart` button.
+- **Diagnostics:** `Uptime`, `ESP Temperature`, `ESPHome Version`, `IP Address`, `Status`
+  (online/offline).
+- **Tailscale variant only:** `VPN Connected`, `VPN IP`, `VPN Peers`, `Device Memory`,
+  a `Reboot` button and more (provided by the Tailscale package), plus a `VPN Disable
+  (stop auto-connect)` button — turns the package's "VPN Enabled" switch off
+  (persisted), so the VPN stays down across reboots until you switch it back on.
+- **Batteries (via MQTT):** ct002's `mqtt_insights` publishes HA Device Discovery for
+  each connected Marstek battery and answers Marstek-app polls on the broker. Note the
+  per-battery devices include their own `Grid Power L1/L2/L3` sensors — these look like
+  duplicates of the meter entities above but are per-battery views; that's expected.
 
 ## Upgrading
 
 > General rule: bump the version, **validate, then compile** before flashing, and keep the
 > old version handy to roll back. Keep ESPHome itself current too —
 > `pip install -U esphome` (or update the add-on/Docker image) — since newer component
-> features can require a newer ESPHome.
+> features can require a newer ESPHome. And remember: **apply the same bump to both
+> variant files.**
 
 ### Upgrading AstraMeter (the ct002 component)
 
-The version is a single substitution:
+The version is a single substitution (in **both** files):
 
 ```yaml
 substitutions:
-  astrameter_version: "2.1.2"      # ← bump this one line
+  astrameter_version: "2.2.3"      # ← bump this one line
 
 external_components:
   - source: github://tomquist/astrameter@${astrameter_version}
     components: [ct002]
+    refresh: never                 # tag is immutable
 ```
 
 1. **Check for a release:** <https://github.com/tomquist/astrameter/releases>
@@ -253,47 +268,52 @@ external_components:
 2. **Read the [CHANGELOG](https://github.com/tomquist/astrameter/blob/main/CHANGELOG.md)**
    between your version and the target — especially any `### Breaking` section and anything
    mentioning **ESPHome / `ct002` / a renamed key**. The ct002 ESPHome component is still
-   flagged *experimental*, so its YAML schema can change between releases.
-3. **Bump** `astrameter_version` to the new tag.
-4. **Validate** (no flashing): `esphome config astrameter-ct002-dsmr.yaml` — catches
-   renamed/removed config keys.
-5. **Compile:** `esphome compile astrameter-ct002-dsmr.yaml`. This step matters: the
-   `CT002 …` runtime/settings entities call the component's internal C++ API
-   (`active_control()`, `connected_slave_count()`, `latest_grid_power()`, `ct_type()`,
-   `ct_mac()`). If an accessor was renamed, the build fails **here**, not at config.
-6. **Flash:** `esphome run astrameter-ct002-dsmr.yaml`.
-7. **Roll back** anytime by setting `astrameter_version` back to the old tag and re-flashing
-   — pinned tags make every build reproducible.
+   flagged *experimental*, so its YAML schema can change between releases. Watch the
+   `balancer:` keys in particular — this config zeroes several of them to keep 2.1.2-style
+   control (see [Configuration](#configuration)), and a release could rename or re-scope
+   them.
+3. **Bump** `astrameter_version` to the new tag in both files.
+4. **Validate** (no flashing): `esphome config astrameter-ct002-dsmr.simple.v3.yaml` —
+   catches renamed/removed config keys.
+5. **Compile:** `esphome compile astrameter-ct002-dsmr.simple.v3.yaml`.
+6. **Flash:** `esphome run astrameter-ct002-dsmr.simple.v3.yaml` (or the Tailscale file).
+7. **Verify behavior on-device:** with active control on, the grid should track ~0 W
+   crisply after load steps. Then **roll back** anytime by setting `astrameter_version`
+   back to the old tag and re-flashing — pinned tags make every build reproducible.
 
-### Upgrading the Tailscale component
+### Upgrading the Tailscale package
+
+*(Tailscale variant only.)*
 
 ```yaml
 packages:
   tailscale:
     url: https://github.com/Csontikka/esphome-tailscale
-    ref: f70c903d88e6b156770cbcb363f3ea5890a033c2   # ← pinned, verified commit
+    ref: v0.4.2   # ← pinned release tag (glue yaml)
     files: [packages/tailscale/tailscale.yaml]
     refresh: 1d
 ```
 
-> **Why it's pinned:** the alternative — `ref: main` + `refresh: 0s` — makes ESPHome
-> **re-fetch the latest `main` on every build**. You'd get updates automatically, but
-> unpredictably: a rebuild months from now could pull a breaking change into a native-C++
-> component without you choosing to. So `ref:` is pinned to the commit this repo was last
-> verified against (`f70c903…`); update it deliberately when you want a newer version.
+> **What the pin does (and doesn't):** `ref:` pins the package's **glue yaml** — the
+> entity/time/switch definitions this config consumes — to a tagged release. The glue
+> itself pulls the actual Tailscale **C++ component from `@main`** (hardcoded upstream
+> with `refresh: 0s`), so the compiled component always tracks upstream main regardless
+> of this pin. In practice a rebuild can still pull new C++ code; the pin only keeps the
+> YAML surface stable.
 
 To update the pin deliberately:
 
-1. **Find the current commit:** `git ls-remote https://github.com/Csontikka/esphome-tailscale main`
-   (or browse the repo's commit history / releases).
-2. **Set `ref:`** to that commit SHA (or a release tag, if the project starts tagging).
-3. **Force a clean rebuild:** `esphome clean astrameter-ct002-dsmr.yaml` then
-   `esphome compile astrameter-ct002-dsmr.yaml`. The component is native C++, so a **compile**
-   is the real test — `esphome config` alone won't catch C++ changes.
+1. **Check the newest release:** <https://github.com/Csontikka/esphome-tailscale/releases>.
+2. **Set `ref:`** to the new tag.
+3. **Force a clean rebuild:** `esphome clean astrameter-ct002-dsmr.simple.tailscale.yaml`
+   then `esphome compile astrameter-ct002-dsmr.simple.tailscale.yaml`. The component is
+   native C++, so a **compile** is the real test — `esphome config` alone won't catch C++
+   changes.
 4. **Flash, then verify on-device:** the `VPN Connected` sensor turns on and `VPN IP`
    populates. Re-confirm **Disable key expiry** is still set for the node in the Tailscale
    admin console, and glance at the `Device Memory` sensor.
-5. **Roll back** by setting `ref:` to the previous commit and rebuilding.
+5. **Roll back** by setting `ref:` to the previous tag and rebuilding (though note the
+   `@main` caveat above — the C++ side doesn't roll back with it).
 
 > Caveats: the component is third-party and experimental, sets global lwIP `sdkconfig`
 > options (shared with the W5500 driver), requires octal PSRAM, and caps tunnel throughput
@@ -303,7 +323,7 @@ To update the pin deliberately:
 
 ```bash
 pip install -U esphome      # or update the Home Assistant add-on / Docker image
-esphome config astrameter-ct002-dsmr.yaml   # re-validate to surface new deprecations
+esphome config astrameter-ct002-dsmr.simple.v3.yaml   # re-validate to surface new deprecations
 ```
 
 Do this **before** a big component bump. It also surfaces deprecations early — e.g. a `/` in
@@ -311,19 +331,21 @@ an entity name (auto-fixed today) becomes a hard error in ESPHome 2026.7.0.
 
 ## Performance & resource usage
 
-Measured from a full `esphome compile` (ESPHome 2026.5.x, ESP-IDF 5.5.4):
-
-| Resource | Usage |
-|----------|-------|
-| Flash (app image) | ~1.15 MB of an ~8 MB app partition (**14%**) — auto-sized for 16 MB flash |
-| Static RAM | ~52 KB of 320 KB internal DRAM (**16%**) + 8 MB PSRAM mostly free |
-| lwIP sockets | `CONFIG_LWIP_MAX_SOCKETS` raised to **24** for ct002's UDP responder + Tailscale headroom |
-
-**CPU:** light at idle/telemetry (one telegram/sec, a few ct002 polls/sec). The real ceiling
-is **WireGuard crypto** — software ChaCha20 on the S3, which is why the tunnel caps at
-~2–5 Mbit/s. Expect low single-digit % at idle, brief spikes during active remote (Tailscale)
-use, OTA, or live web-UI streaming. If a future build runs tight, set `web_server: local:
-false` to load the UI assets from a CDN instead of embedding them.
+- **Compiler:** built with `compiler_optimization: PERF` (-O2 — speed over size; with
+  16 MB flash the size cost is irrelevant).
+- **lwIP sockets:** `CONFIG_LWIP_MAX_SOCKETS` is raised to **32**. The config stacks
+  several socket users — ct002's UDP responder, MQTT, the native API, the OTA listener,
+  mDNS, and the web server (up to ~9 at peak) — for a worst case around 20 concurrent,
+  plus a handful more for Tailscale's control plane in that variant.
+- **Ethernet SPI:** the W5500 runs at 40 MHz for lower latency on the UDP/API path; drop
+  to 33 MHz if your board is unstable.
+- **CPU:** light at idle (one telegram/sec, a few ct002 polls/sec). In the Tailscale
+  variant the real ceiling is **WireGuard crypto** — software ChaCha20 on the S3 — which
+  caps the tunnel at ~2–5 Mbit/s; expect brief spikes during remote use, OTA, or live
+  web-UI streaming.
+- **Memory:** the app image fits comfortably in the auto-sized ~8 MB app partition, and
+  the 8 MB PSRAM stays mostly free. If a build ever runs tight, set `web_server:
+  local: false` to load the UI assets from a CDN instead of embedding them.
 
 ## Troubleshooting
 
@@ -331,9 +353,11 @@ false` to load the UI assets from a CDN instead of embedding them.
 |---------|-------|
 | No telegrams parsed | `inverted: true` set, 10 kΩ pull-up present, wire on GPIO16, baud 115200 |
 | ct002 not detected by battery | device + battery on the same subnet; UDP 12345 open; battery in **Self-Adaptation** mode |
-| MQTT won't connect | broker reachable on the tailnet, secrets filled; a few failed attempts at boot are normal until the tunnel + time sync come up |
+| Grid values frozen / batteries idle | `max_sensor_age: 30s` zeroes the battery input if telegrams stop — check the P1 wire and the `Grid Power` sensors |
+| MQTT won't connect | broker reachable (on the LAN, or on the tailnet for the Tailscale variant); secrets filled; a few failed attempts at boot are normal until the connection (and, with Tailscale, the tunnel + time sync) comes up |
 | Tailscale won't connect | auth key valid, key-expiry disabled, PSRAM present, device has internet for the control plane |
-| Build too large / low heap | `web_server: local: false`; watch the `Device Memory` sensor |
+| Duplicate battery sensors in HA | expected — `mqtt_insights` creates per-battery devices with their own grid sensors (see [Entities](#entities)) |
+| Build too large / low heap | `web_server: local: false`; watch the `Device Memory` sensor (Tailscale variant) |
 
 ## Credits
 
