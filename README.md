@@ -363,6 +363,7 @@ an entity name (auto-fixed today) becomes a hard error in ESPHome 2026.7.0.
 | Tailscale won't connect | auth key valid, key-expiry disabled, PSRAM present, device has internet for the control plane |
 | Duplicate battery sensors in HA | expected — `mqtt_insights` creates per-battery devices with their own grid sensors (see [Entities](#entities)) |
 | Build too large / low heap | `web_server: local: false`; watch the `Device Memory` sensor (Tailscale variant) |
+| Build errors in microlink/ml_*.c after switching variants | stale shared build dir — `rm -rf .esphome/build/astrameter-ct002-dsmr` and recompile (`esphome clean` isn't enough) |
 
 ## Credits
 
