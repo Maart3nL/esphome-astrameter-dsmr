@@ -52,8 +52,13 @@ esp32:
       # Default TCP MSS (1440) produces segments too large for VPN tunnels into
       # the LAN (encapsulation overhead shrinks the effective MTU), so full-size
       # web_server responses get dropped and the web UI stalls when accessed
-      # over VPN. 1400 keeps segments small enough to survive the tunnel.
-      CONFIG_LWIP_TCP_MSS: "1400"
+      # over VPN: the small login page arrives but the larger UI bundle blackholes.
+      # 1400 still exceeds low-MTU tunnels (WireGuard ~1420, Tailscale ~1280): a
+      # 1400-byte MSS becomes a 1440-byte IP packet. 1200 (-> 1240-byte packets)
+      # fits every common tunnel with margin; the overhead cost on the small
+      # gzipped web bundle is negligible. Raise toward 1360 only if you know your
+      # tunnel's MTU is >=1400 and want marginally fewer segments.
+      CONFIG_LWIP_TCP_MSS: "1200"
 
 # 8 MB octal PSRAM (the "R8" module).
 psram:
