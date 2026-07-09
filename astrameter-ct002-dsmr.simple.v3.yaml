@@ -25,7 +25,7 @@ substitutions:
   friendly_name: "AstraMeter CT002 (DSMR)"
 
   # AstraMeter (ct002) release. Releases: https://github.com/tomquist/astrameter/releases
-  astrameter_version: "2.2.3"
+  astrameter_version: "2.2.4"
 
   # P1 wiring (Waveshare board defaults; change if your wiring differs)
   dsmr_rx_pin: GPIO16           # P1 data line (RJ12 pin 5) -> ESP RX (10k pull-up to 3V3)

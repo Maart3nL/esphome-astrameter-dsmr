@@ -203,7 +203,7 @@ days.
 ## Configuration
 
 - **AstraMeter version** — a single substitution at the top of each file
-  (`astrameter_version: "2.2.3"`), used to pin the `ct002` external component to a release
+  (`astrameter_version: "2.2.4"`), used to pin the `ct002` external component to a release
   tag. See [Upgrading AstraMeter](#upgrading-astrameter-the-ct002-component).
 - **ct002 tuning** — the emulator runs on the component's **built-in defaults** for
   filters/saturation; only a handful of knobs are set directly in the `ct002:` block.
@@ -260,7 +260,7 @@ The version is a single substitution (in **both** files):
 
 ```yaml
 substitutions:
-  astrameter_version: "2.2.3"      # ← bump this one line
+  astrameter_version: "2.2.4"      # ← bump this one line
 
 external_components:
   - source: github://tomquist/astrameter@${astrameter_version}
